@@ -252,7 +252,7 @@ static void count_around(const game_params *params, struct solution_cell *sol, i
     }
 }
 
-/*static void count_clues_around(const game_params *params,  struct desc_cell *desc, int x, int y, int *clues, int *total) {
+static void count_clues_around(const game_params *params,  struct desc_cell *desc, int x, int y, int *clues, int *total) {
     int i, j;
     struct desc_cell *curr = NULL;
     (*total)=0;
@@ -269,7 +269,7 @@ static void count_around(const game_params *params, struct solution_cell *sol, i
             }
         }
     }
-}*/
+}
 
 static void mark_around(const game_params *params, struct solution_cell *sol, int x, int y, int mark) {
     int i, j, marked = 0;
@@ -330,7 +330,7 @@ static char solve_cell(const game_params *params, struct desc_cell *desc, struct
     }
 }
 
-static void print_solve(const game_params *params, struct desc_cell *desc, const struct solution_cell *sol) {
+/*static void print_solve(const game_params *params, struct desc_cell *desc, const struct solution_cell *sol) {
     int x,y;
     printf("Current solution:\n");
     for (y=0; y< params->height; y++) {
@@ -339,7 +339,7 @@ static void print_solve(const game_params *params, struct desc_cell *desc, const
         }
         printf("\n");
     }
-}
+}*/
 
 static bool solve_check(const game_params *params, struct desc_cell *desc) {
     int x,y;
@@ -362,9 +362,38 @@ static bool solve_check(const game_params *params, struct desc_cell *desc) {
         }
         iter++;
     }
-    print_solve(params, desc, sol);
+    /*print_solve(params, desc, sol);*/
     sfree(sol);
     return solved == params->height*params->width;
+}
+
+static void hide_clues(const game_params *params, struct desc_cell *desc, random_state *rs){
+    int to_hideX, to_hideY, hidden, shown, total, tries = 0, x, y;
+    bool solveable = false;
+    struct desc_cell *curr;
+
+    printf("Hiding clues\n");
+    while (!solveable && tries < 10) {
+        for (hidden=0;hidden < (params->height * params->width);hidden++) {
+            to_hideX=random_upto(rs, params->width);
+            to_hideY=random_upto(rs, params->height);
+            count_clues_around(params, desc, to_hideX, to_hideY, &shown, &total);
+            if (shown > 1) {
+                curr = get_cords(params, desc, to_hideX, to_hideY);
+                curr->shown=false;
+            }
+        }
+        solveable=solve_check(params, desc);
+        if (solveable) {
+            break;
+        }
+        for (y=0; y< params->height; y++) {
+            for (x=0; x < params->width; x++) {
+                curr = get_cords(params, desc, x, y);
+                curr->shown=true;
+            }
+        }
+    }
 }
 
 static bool start_point_check(size_t size, struct desc_cell *desc) {
@@ -422,12 +451,18 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             valid = solve_check(params, desc);
             if (!valid) {
                 printf("Couldn't solve, regenerating.");
+            } else {
+                hide_clues(params, desc, rs);
             }
         }
     }
     for (y=0; y< params->height; y++) {
         for (x=0; x < params->width; x++) {
-            printf("%d(%d)", desc[(y*params->width)+x].value, desc[(y*params->width)+x].clue);
+            if (desc[(y*params->width)+x].shown) {
+                printf("%d(%d)", desc[(y*params->width)+x].value, desc[(y*params->width)+x].clue);
+            } else {
+                printf("%d( )", desc[(y*params->width)+x].value);
+            }
         }
         printf("\n");
     }
