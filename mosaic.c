@@ -20,13 +20,15 @@
 
 #include "puzzles.h"
 
-#define DEFAULT_SIZE 3
-#define SOLVE_MAX_ITERATIONS 2
+#define DEFAULT_SIZE 5
+#define SOLVE_MAX_ITERATIONS 200
 #define DEBUG_IMAGE 1
+#undef DEBUG_IMAGE
 
-/* Getting the coordinates and returning NULL when out of scope */
-#define get_cords(params, array, x, y) (x >= 0 && y >= 0) && (x< params->width && y<params->height)? \
-     &array[(y*params->width)+x]: NULL;
+/* Getting the coordinates and returning NULL when out of scope 
+ * The absurd amount of parentesis is needed to avoid order of operations issues */
+#define get_cords(params, array, x, y) (((x) >= 0 && (y) >= 0) && ((x)< params->width && (y)<params->height))? \
+     array + ((y)*params->width)+x : NULL;
 
 enum {
     COL_BACKGROUND,
@@ -228,50 +230,6 @@ static void populate_cell(const game_params *params, const bool *image, const in
     desc->clue = clue;
 }
 
-static void mark_left(const game_params *params, struct solution_cell *sol, int x, int y, int mark) {
-    int i;
-    struct solution_cell *curr;
-    for (i=-1;i < 2; i++) {
-        curr = get_cords(params, sol, x-1, y+i);
-        if (curr) {
-            curr->cell = mark;
-        }
-    }
-}
-
-static void mark_right(const game_params *params, struct solution_cell *sol, int x, int y, int mark) {
-    int i;
-    struct solution_cell *curr;
-    for (i=-1;i < 2; i++) {
-        curr = get_cords(params, sol, x+1, y+i);
-        if (curr) {
-            curr->cell = mark;
-        }
-    }
-}
-
-static void mark_bottom(const game_params *params, struct solution_cell *sol, int x, int y, int mark) {
-    int i;
-    struct solution_cell *curr;
-    for (i=-1;i < 2; i++) {
-        curr = get_cords(params, sol, x+i, y+1);
-        if (curr) {
-            curr->cell = mark;
-        }
-    }
-}
-
-static void mark_top(const game_params *params, struct solution_cell *sol , int x, int y, int mark) {
-    int i;
-    struct solution_cell *curr;
-    for (i=-1;i < 2; i++) {
-        curr = get_cords(params, sol, x+i, y-1);
-        if (curr) {
-            curr->cell = mark;
-        }
-    }
-}
-
 static void count_around(const game_params *params, struct solution_cell *sol, int x, int y, int *marked, int *blank, int *total) {
     int i, j;
     struct solution_cell *curr = NULL;
@@ -294,8 +252,27 @@ static void count_around(const game_params *params, struct solution_cell *sol, i
     }
 }
 
-static void mark_around(const game_params *params, struct solution_cell *sol, int x, int y, int mark) {
+/*static void count_clues_around(const game_params *params,  struct desc_cell *desc, int x, int y, int *clues, int *total) {
     int i, j;
+    struct desc_cell *curr = NULL;
+    (*total)=0;
+    (*clues)=0;
+ 
+    for (i=-1; i < 2; i++) {
+        for (j=-1; j < 2; j++) {
+            curr=get_cords(params, desc, x+i, y+j);
+            if (curr) {
+                (*total)++;
+                if (curr->shown) {
+                    (*clues)++;
+                }
+            }
+        }
+    }
+}*/
+
+static void mark_around(const game_params *params, struct solution_cell *sol, int x, int y, int mark) {
+    int i, j, marked = 0;
     struct solution_cell *curr;
 
     for (i=-1; i < 2; i++) {
@@ -304,6 +281,7 @@ static void mark_around(const game_params *params, struct solution_cell *sol, in
             if (curr) {
                 if (curr->cell == STATE_UNMARKED) {
                     curr->cell = mark;
+                    marked++;
                 }
             }
         }
@@ -319,21 +297,13 @@ static char solve_cell(const game_params *params, struct desc_cell *desc, struct
     }
     if (curr->full && curr->shown) {
         sol[(y*params->width)+x].solved = true;
-        sol[(y*params->width)+x].cell = STATE_MARKED;
-        mark_bottom(params, sol, x, y, STATE_MARKED);
-        mark_top(params, sol, x, y, STATE_MARKED);
-        mark_left(params, sol, x, y, STATE_MARKED);
-        mark_right(params, sol, x, y, STATE_MARKED);
+        mark_around(params, sol, x, y, STATE_MARKED);
         return 1;
     }
     if (curr->empty && curr->shown)
     {
         sol[(y*params->width)+x].solved = true;
-        sol[(y*params->width)+x].cell = STATE_BLANK;
-        mark_bottom(params, sol, x, y, STATE_BLANK);
-        mark_top(params, sol, x, y, STATE_BLANK);
-        mark_left(params, sol, x, y, STATE_BLANK);
-        mark_right(params, sol, x, y, STATE_BLANK);
+        mark_around(params, sol, x, y, STATE_BLANK);
         return 1;
     }
     count_around(params, sol, x, y, &marked, &blank, &total);
@@ -360,6 +330,17 @@ static char solve_cell(const game_params *params, struct desc_cell *desc, struct
     }
 }
 
+static void print_solve(const game_params *params, struct desc_cell *desc, const struct solution_cell *sol) {
+    int x,y;
+    printf("Current solution:\n");
+    for (y=0; y< params->height; y++) {
+        for (x=0; x < params->width; x++) {
+            printf("M: %d, S: %d, C: %d ",sol[(y*params->width)+x].cell, sol[(y*params->width)+x].solved, desc[(y*params->width)+x].clue);
+        }
+        printf("\n");
+    }
+}
+
 static bool solve_check(const game_params *params, struct desc_cell *desc) {
     int x,y;
     struct solution_cell *sol = snewn(params->height*params->width, struct solution_cell);
@@ -372,7 +353,7 @@ static bool solve_check(const game_params *params, struct desc_cell *desc) {
             for (x=0; x < params->width; x++) {
                 curr = solve_cell(params, desc, sol, x, y);
                 if (curr < 0) {
-                    iter = 9000;
+                    iter = SOLVE_MAX_ITERATIONS;
                     printf("error in cell x=%d, y=%d\n", x, y);
                     break;
                 }
@@ -381,7 +362,8 @@ static bool solve_check(const game_params *params, struct desc_cell *desc) {
         }
         iter++;
     }
-    /*sfree(sol);*/
+    print_solve(params, desc, sol);
+    sfree(sol);
     return solved == params->height*params->width;
 }
 
@@ -437,8 +419,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         if (!valid) {
             printf("Not valid, regenerating.\n");
         } else {
-            /* valid = */solve_check(params, desc);
-            printf("Check solution result: %d\n", valid);
+            valid = solve_check(params, desc);
+            if (!valid) {
+                printf("Couldn't solve, regenerating.");
+            }
         }
     }
     for (y=0; y< params->height; y++) {
