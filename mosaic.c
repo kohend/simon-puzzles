@@ -19,9 +19,10 @@
 
 #include "puzzles.h"
 
-#define DEFAULT_SIZE 5
-#define DEFAULT_AGGRESSIVENESS 10
-#define SOLVE_MAX_ITERATIONS 200
+#define DEFAULT_SIZE 10
+#define DEFAULT_AGGRESSIVENESS 30
+#define SOLVE_MAX_ITERATIONS 2500
+#define DEFAULT_TILE_SIZE 32
 #define DEBUG_IMAGE 1
 #undef DEBUG_IMAGE
 
@@ -93,6 +94,12 @@ struct desc_cell
     bool empty;
 };
 
+struct game_ui
+{
+    bool solved;
+    bool in_progress;
+};
+
 
 static game_params *default_params(void)
 {
@@ -138,11 +145,14 @@ static game_params *dup_params(const game_params *params)
 
 static void decode_params(game_params *params, char const *string)
 {
+
 }
 
 static char *encode_params(const game_params *params, bool full)
 {
-    return dupstr("FIXME");
+    char encoded[20] = "";
+    sprintf(encoded, "%dx%dl%da%d", params->width, params->height, params->aggressiveness, params->advanced);
+    return dupstr(encoded);
 }
 
 static config_item *game_configure(const game_params *params)
@@ -494,7 +504,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 {
     bool *image = snewn(params->height*params->width, bool);
     bool valid = false;
-    char *desc_string = snewn((params->height*params->width*4)+1, char);
+    char *desc_string = snewn((params->height*params->width)+1, char);
 
     struct desc_cell* desc=snewn(params->height*params->width, struct desc_cell);    
     int x,y, location_in_str;
@@ -628,7 +638,21 @@ static bool game_can_format_as_text_now(const game_params *params)
 
 static char *game_text_format(const game_state *state)
 {
-    return NULL;
+    char *desc_string = snewn((state->height*state->width)*3+1, char);
+    int location_in_str = 0, x, y;
+    for (y=0; y< state->height; y++) {
+        for (x=0; x < state->width; x++) {
+            if (state->board->actual_board[(y*state->width)+x].shown) {
+                sprintf(desc_string + location_in_str, "|%d|", state->board->actual_board[(y*state->width)+x].clue);
+            } else {
+                sprintf(desc_string + location_in_str, "| |");
+            }
+            location_in_str+=3;
+        }
+        sprintf(desc_string + location_in_str, "\n");
+        location_in_str+=1;
+    }
+    return desc_string;
 }
 
 static game_ui *new_ui(const game_state *state)
@@ -656,7 +680,6 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
 
 struct game_drawstate {
     int tilesize;
-    int FIXME;
 };
 
 static char *interpret_move(const game_state *state, game_ui *ui,
@@ -668,8 +691,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     char move_desc[15] = "";
     char *ret = NULL;
     if (button == LEFT_BUTTON || button == RIGHT_BUTTON) {
-        gameX=x/ds->tilesize;
-        gameY=y/ds->tilesize;
+        gameX=(x-(ds->tilesize/2))/ds->tilesize;
+        gameY=(y-(ds->tilesize/2))/ds->tilesize;
         if (button == RIGHT_BUTTON) {
             /* Right button toggles twice */
             move_type = 'T';
@@ -690,7 +713,7 @@ static game_state *execute_move(const game_state *state, const char *move)
     int i = 0, x, y, marked, total, blank;
     char *comma, *cell;
     struct board_cell *curr;
-    char coordinate[12];
+    char coordinate[12] = "";
     int steps = 1;
     if (move[0] == 't' || move[0] == 'T') {
         if (move[0] == 'T') {
@@ -699,9 +722,13 @@ static game_state *execute_move(const game_state *state, const char *move)
         i++;
         comma=strchr(move + i, ',');
         if (comma != NULL) {
-            strncpy(coordinate, move + i, comma - move -i);
+            memset(coordinate, 0, sizeof(char)*12);
+            strncpy(coordinate, move + i, comma - move - 1);
             x = atol(coordinate);
-            strcpy(coordinate, comma + 1);
+            i = comma - move;
+            i++;
+            memset(coordinate, 0, sizeof(char)*12);
+            strcpy(coordinate, move + i);
             y = atol(coordinate);
             cell = get_cords(new_state, new_state->cells_contents, x, y);
             if (*cell >= STATE_OK_NUM) {
@@ -758,7 +785,6 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = 0;
-    ds->FIXME = 0;
 
     return ds;
 }
@@ -772,7 +798,7 @@ static void draw_cell(drawing *dr, game_drawstate *ds,
                     const game_state *state,
                     int x, int y) {
     const int ts = ds->tilesize;
-    int startX = x * ts, startY = y * ts;
+    int startX = (x * ts) + ts/2, startY = (y * ts)+ ts/2;
     int color, text_color = COL_GRID;
     
     char *cell_p = get_cords(state, state->cells_contents, x, y);
@@ -827,6 +853,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         }
     }
     draw_update(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize);
+    status_bar(dr, dupstr(""));
 }
 
 static float game_anim_length(const game_state *oldstate,
@@ -859,6 +886,12 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 {
 }
 
+#ifdef ANDROID
+static void android_cursor_visibility(game_ui *ui, int visible) {
+
+}
+#endif
+
 #ifdef COMBINED
 #define thegame mosaic
 #endif
@@ -879,16 +912,19 @@ const struct game thegame = {
     dup_game,
     free_game,
     false, solve_game,
-    false, game_can_format_as_text_now, game_text_format,
+    true, game_can_format_as_text_now, game_text_format,
     new_ui,
     free_ui,
     encode_ui,
     decode_ui,
     NULL, /* game_request_keys */
+#ifdef ANDROID
+    android_cursor_visibility,
+#endif
     game_changed_state,
     interpret_move,
     execute_move,
-    20 /* FIXME */, game_compute_size, game_set_size,
+    DEFAULT_TILE_SIZE, game_compute_size, game_set_size,
     game_colours,
     game_new_drawstate,
     game_free_drawstate,
@@ -896,8 +932,10 @@ const struct game thegame = {
     game_anim_length,
     game_flash_length,
     game_status,
-    false, false, game_print_size, game_print,
-    false,			       /* wants_statusbar */
-    false, game_timing_state,
+#ifndef NO_PRINTING
+    false, false, game_print_size, game_print,     
+#endif
+    true,			       /* wants_statusbar */
+    true, game_timing_state,
     0,				       /* flags */
 };
