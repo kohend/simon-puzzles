@@ -33,11 +33,15 @@
 
 enum {
     COL_BACKGROUND = 0,
+    COL_UNMARKED,
     COL_GRID,
-    COL_MARKED = COL_GRID,
+    COL_MARKED,
     COL_BLANK,
+    COL_TEXT_SOLVED,
     COL_ERROR,
     COL_LOWLIGHT,
+    COL_TEXT_DARK = COL_MARKED,
+    COL_TEXT_LIGHT = COL_BLANK,
     COL_HIGHLIGHT = COL_ERROR, /* mkhighlight needs it, I don't */
     COL_CURSOR = COL_LOWLIGHT,
     NCOLOURS
@@ -47,9 +51,12 @@ enum cell_state {
     STATE_UNMARKED = 0,
     STATE_MARKED,
     STATE_BLANK,
+    STATE_UNMARKED_ERROR,
     STATE_MARKED_ERROR,
     STATE_BLANK_ERROR,
-    STATE_OK_NUM = STATE_MARKED_ERROR
+    STATE_BLANK_SOLVED,
+    STATE_MARKED_SOLVED,
+    STATE_OK_NUM = STATE_UNMARKED_ERROR
 };
 
 struct game_params {
@@ -63,6 +70,7 @@ typedef struct board_state board_state;
 
 struct game_state {
     bool cheating;
+    int not_completed_clues;
     int width;
     int height;
     char *cells_contents;
@@ -120,14 +128,14 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
         return false;
     }
     game_params *res = snew(game_params);
-    res->height=sizes[i];
-    res->width=sizes[i];
-    res->aggressiveness=10;
-    res->advanced=false;
+    res->height = sizes[i];
+    res->width = sizes[i];
+    res->aggressiveness = DEFAULT_AGGRESSIVENESS;
+    res->advanced = false;
     *params=res;
     char *value = snewn(20, char);
     sprintf(value, "Size: %dx%d", sizes[i], sizes[i]);
-    *name=value;
+    *name = value;
     return true;
 }
 
@@ -145,13 +153,44 @@ static game_params *dup_params(const game_params *params)
 
 static void decode_params(game_params *params, char const *string)
 {
-
+    char *curr = strchr(string, 'x');
+    char temp[15] = "";
+    char *prev = NULL;
+    int loc = 0;
+    if (!curr) {
+        return;
+    }
+    strncpy(temp, string, curr-string);
+    params->width = atol(temp);
+    prev = curr;
+    curr = strchr(string, 'l');
+    if (curr) {
+        strncpy(temp, prev + 1, curr - prev);
+        params->height = atol(temp);
+    } else {
+        curr = strchr(string, 'a');
+        strncpy(temp, prev + 1, curr - prev);
+        params->height = atol(temp);
+    }
+    curr++;
+    while (*curr != 'a' && *curr != '\0')
+    {
+        temp[loc] = *curr;
+        loc++;
+        curr++;
+    }
+    temp[loc] = '\0';
+    params->aggressiveness = atol(temp);
 }
 
 static char *encode_params(const game_params *params, bool full)
 {
     char encoded[20] = "";
-    sprintf(encoded, "%dx%dl%da%d", params->width, params->height, params->aggressiveness, params->advanced);
+    if (full) {
+        sprintf(encoded, "%dx%dl%da%d", params->width, params->height, params->aggressiveness, params->advanced);
+    } else {
+        sprintf(encoded, "%dx%da%d", params->width, params->height, params->advanced);
+    }
     return dupstr(encoded);
 }
 
@@ -170,7 +209,7 @@ static config_item *game_configure(const game_params *params)
     config[1].u.string.sval=value;
     value = snewn(12, char);
     config[2].type=C_STRING;
-    config[2].name="Agressiveness in hint hiding (higher takes longer to generate)";
+    config[2].name="Level";
     sprintf(value,"%d", params->aggressiveness);
     config[2].u.string.sval=value;
     config[3].name="Advanced (unsupported)";
@@ -321,9 +360,9 @@ static void count_around_state(const game_state *state, int x, int y, int *marke
             curr=get_cords(state, state->cells_contents, x+i, y+j);
             if (curr) {
                 (*total)++;
-                if (*curr == STATE_BLANK) {
+                if (*curr == STATE_BLANK || *curr == STATE_BLANK_SOLVED || *curr == STATE_BLANK_ERROR) {
                     (*blank)++;
-                } else if (*curr == STATE_MARKED) {
+                } else if (*curr == STATE_MARKED || *curr == STATE_MARKED_SOLVED || *curr == STATE_MARKED_ERROR) {
                     (*marked)++;
                 }
             }
@@ -573,6 +612,7 @@ static game_state *new_game(midend *me, const game_params *params,
     char *desc_base = curr_desc;
 
     state->cheating = false;
+    state->not_completed_clues = 0;
     state->height = params->height;
     state->width = params->width;
     state->cells_contents = snewn(params->height*params->width, char);
@@ -584,6 +624,7 @@ static game_state *new_game(midend *me, const game_params *params,
     while (*curr_desc != '\0') {
         if (*curr_desc >= '0' && *curr_desc <= '9'){
             state->board->actual_board[curr_desc-desc_base].shown = true;
+            state->not_completed_clues++;
             state->board->actual_board[curr_desc-desc_base].clue = *curr_desc - '0';
         } else {
             state->board->actual_board[curr_desc-desc_base].shown = false;
@@ -640,7 +681,7 @@ static char *game_text_format(const game_state *state)
 {
     char *desc_string = snewn((state->height*state->width)*3+1, char);
     int location_in_str = 0, x, y;
-    for (y=0; y< state->height; y++) {
+    for (y=0; y < state->height; y++) {
         for (x=0; x < state->width; x++) {
             if (state->board->actual_board[(y*state->width)+x].shown) {
                 sprintf(desc_string + location_in_str, "|%d|", state->board->actual_board[(y*state->width)+x].clue);
@@ -707,14 +748,79 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     return ret;
 }
 
+static void update_board_state_around(game_state *state, int x, int y) {
+    int i, j;
+    struct board_cell *curr;
+    char *curr_state;
+    int total;
+    int blank;
+    int marked;
+ 
+    for (i=-1; i < 2; i++) {
+        for (j=-1; j < 2; j++) {
+            curr=get_cords(state, state->board->actual_board, x+i, y+j);
+            if (curr && curr->shown) {
+                curr_state = get_cords(state, state->cells_contents, x+i, y+j);
+                count_around_state(state, x+i, y+j, &marked, &blank, &total);
+                if (curr->clue == marked && (total - marked - blank) == 0) {
+                    switch (*curr_state)
+                    {
+                    case STATE_BLANK:
+                    case STATE_BLANK_ERROR:
+                        *curr_state = STATE_BLANK_SOLVED;
+                        break;
+                    case STATE_MARKED:
+                    case STATE_MARKED_ERROR:
+                        *curr_state = STATE_MARKED_SOLVED;
+                        break;
+                    default:
+                        break;
+                    }
+                } else if (curr->clue < marked || curr->clue > (total - blank)) {
+                    switch (*curr_state)
+                    {
+                    case STATE_BLANK_SOLVED:
+                    case STATE_BLANK:
+                        *curr_state = STATE_BLANK_ERROR;
+                        break;
+                    case STATE_MARKED_SOLVED:
+                    case STATE_MARKED:
+                        *curr_state = STATE_MARKED_ERROR;
+                        break;
+                    default:
+                        break;
+                    }
+                } else {
+                    switch (*curr_state)
+                    {
+                    case STATE_BLANK_SOLVED:
+                    case STATE_BLANK_ERROR:
+                        *curr_state = STATE_BLANK;
+                        break;
+                    case STATE_MARKED_SOLVED:
+                    case STATE_MARKED_ERROR:
+                        *curr_state = STATE_MARKED;
+                        break;
+                    case STATE_UNMARKED_ERROR:
+                        *curr_state = STATE_UNMARKED;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 static game_state *execute_move(const game_state *state, const char *move)
 {
     game_state *new_state = dup_game(state);
-    int i = 0, x, y, marked, total, blank;
+    int i = 0, x, y, clues_left = 0;
     char *comma, *cell;
-    struct board_cell *curr;
     char coordinate[12] = "";
     int steps = 1;
+    struct board_cell *curr_cell;
     if (move[0] == 't' || move[0] == 'T') {
         if (move[0] == 'T') {
             steps++;
@@ -732,16 +838,21 @@ static game_state *execute_move(const game_state *state, const char *move)
             y = atol(coordinate);
             cell = get_cords(new_state, new_state->cells_contents, x, y);
             if (*cell >= STATE_OK_NUM) {
-                *cell -= 2;
+                *cell -= 3;
             }
             *cell = (*cell + steps) % STATE_OK_NUM;
-            curr = get_cords(state, state->board->actual_board, x, y);
-            if (*cell != STATE_UNMARKED && curr->shown) {
-                count_around_state(new_state, x, y, &marked, &blank, &total);
-                if (marked > curr->clue || curr->clue > (total-blank)) {
-                    *cell += 2;
+            update_board_state_around(new_state, x, y);
+            
+            for (y=0; y < state->height; y++) {
+                for (x=0; x < state->width; x++) {
+                    cell = get_cords(new_state, new_state->cells_contents, x, y);
+                    curr_cell = get_cords(new_state, new_state->board->actual_board, x, y);
+                    if (curr_cell->shown && *cell <= STATE_BLANK_ERROR) {
+                        clues_left++;
+                    }
                 }
             }
+            new_state->not_completed_clues=clues_left;
         }
     }
     return new_state;
@@ -771,11 +882,14 @@ static float *game_colours(frontend *fe, int *ncolours)
 {
     float *ret = snewn(3 * NCOLOURS, float);
 
-   /* frontend_default_colour(fe, &ret[COL_BACKGROUND * 3]);*/
-    COLOUR(ret, COL_GRID,  0.0F, 0.0F, 0.0F);
+    frontend_default_colour(fe, &ret[COL_BACKGROUND * 3]);
+    COLOUR(ret, COL_GRID,  0.0F, 102/255.0F, 99/255.0F);
     COLOUR(ret, COL_ERROR, 1.0F, 0.0F, 0.0F);
-    COLOUR(ret, COL_BLANK,  1.0F, 1.0F, 1.0F);
-    COLOUR(ret, COL_BACKGROUND,  0.8F, 0.8F, 0.8F);
+    COLOUR(ret, COL_BLANK,  236/255.0F, 236/255.0F, 236/255.0F);
+    COLOUR(ret, COL_MARKED,  20/255.0F, 20/255.0F, 20/255.0F);
+    COLOUR(ret, COL_UNMARKED,  148/255.0F, 196/255.0F, 190/255.0F);
+    COLOUR(ret, COL_TEXT_SOLVED,  100/255.0F, 100/255.0F, 100/255.0F);
+
     *ncolours = NCOLOURS;
     return ret;
 }
@@ -798,32 +912,50 @@ static void draw_cell(drawing *dr, game_drawstate *ds,
                     const game_state *state,
                     int x, int y) {
     const int ts = ds->tilesize;
-    int startX = (x * ts) + ts/2, startY = (y * ts)+ ts/2;
-    int color, text_color = COL_GRID;
+    int startX = ((x * ts) + ts/2)-1, startY = ((y * ts)+ ts/2)-1;
+    int color, text_color = COL_TEXT_DARK;
     
     char *cell_p = get_cords(state, state->cells_contents, x, y);
     char cell = *cell_p;
-    if (cell != STATE_MARKED && cell != STATE_MARKED_ERROR) {
-        draw_rect_outline(dr, startX, startY, ts, ts, COL_GRID);
-    } else {
-        draw_rect(dr, startX, startY, ts, ts, COL_GRID);
-    }
+    draw_rect_outline(dr, startX-1, startY-1, ts+1, ts+1, COL_GRID);
 
-    if (cell == STATE_MARKED || cell == STATE_MARKED_ERROR) {
+    switch (cell)
+    {
+    case STATE_MARKED:
         color = COL_MARKED;
-    } else if (cell == STATE_BLANK || cell == STATE_BLANK_ERROR) {
+        text_color = COL_TEXT_LIGHT;
+        break;    
+    case STATE_MARKED_SOLVED:
+        text_color = COL_TEXT_SOLVED;
+        color = COL_MARKED;
+        break;
+    case STATE_BLANK:
+        text_color = COL_TEXT_DARK;
         color = COL_BLANK;
-    } else {
-        color = COL_BACKGROUND;
+        break;
+    case STATE_BLANK_SOLVED:
+        color = COL_BLANK;
+        text_color = COL_TEXT_SOLVED;
+        break;
+    case STATE_BLANK_ERROR:
+        color = COL_BLANK;
+        text_color = COL_ERROR;
+        break;
+    case STATE_MARKED_ERROR:
+        text_color = COL_ERROR;
+        color = COL_MARKED;
+        break;
+    case STATE_UNMARKED_ERROR:
+        text_color = COL_ERROR;
+        color = COL_UNMARKED;
+        break;
+    default:
+        text_color = COL_TEXT_DARK;
+        color = COL_UNMARKED;
+        break;
     }
     
-    draw_rect(dr, startX+1, startY+1, ts-2, ts-2, color);
-    if (color == COL_GRID) {
-        text_color = COL_BACKGROUND;
-    }
-    if (cell >= STATE_OK_NUM) {
-        text_color = COL_ERROR;
-    }
+    draw_rect(dr, startX, startY, ts-1, ts-1, color);
     struct board_cell *curr = NULL;
     char clue[3];
     curr = get_cords(state, state->board->actual_board, x, y);
@@ -846,14 +978,23 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * covering the whole window.
      */
     int x, y;
-    draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BACKGROUND);
+    char status[20] = "";
+    if (flashtime) {
+        draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BLANK);    
+    } else {
+        draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BACKGROUND);
+    }
     for (y=0;y<state->height;y++) {
         for (x=0;x<state->height;x++) {
             draw_cell(dr, ds, state, x, y);
         }
     }
     draw_update(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize);
-    status_bar(dr, dupstr(""));
+    sprintf(status, "Clues left: %d", state->not_completed_clues);
+    if (state->not_completed_clues == 0) {
+        sprintf(status, "Completed!!!");
+    }
+    status_bar(dr, dupstr(status));
 }
 
 static float game_anim_length(const game_state *oldstate,
@@ -865,6 +1006,9 @@ static float game_anim_length(const game_state *oldstate,
 static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir, game_ui *ui)
 {
+    if (!oldstate->cheating && oldstate->not_completed_clues > 0 && newstate->not_completed_clues == 0) {
+        return 0.7F;
+    }
     return 0.0F;
 }
 
@@ -875,7 +1019,7 @@ static int game_status(const game_state *state)
 
 static bool game_timing_state(const game_state *state, game_ui *ui)
 {
-    return true;
+    return state->not_completed_clues > 0;
 }
 
 static void game_print_size(const game_params *params, float *x, float *y)
