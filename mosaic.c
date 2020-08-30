@@ -22,9 +22,13 @@
 #define DEFAULT_SIZE 10
 #define DEFAULT_AGGRESSIVENESS 30
 #define SOLVE_MAX_ITERATIONS 2500
+#define MAX_TILES 10000
+#define MAX_TILES_ERROR "Maximum size is 10000 tiles"
 #define DEFAULT_TILE_SIZE 32
 #define DEBUG_IMAGE 1
 #undef DEBUG_IMAGE
+
+/* To enable debug prints define DEBUG_PRINTS */
 
 /* Getting the coordinates and returning NULL when out of scope 
  * The absurd amount of parentesis is needed to avoid order of operations issues */
@@ -91,6 +95,7 @@ struct board_cell
 struct solution_cell {
     char cell;
     bool solved;
+    bool needed;
 };
 
 struct desc_cell
@@ -237,8 +242,8 @@ static const char *validate_params(const game_params *params, bool full)
     if (params->height < 3 || params->width < 3) {
         return "Minimal size is 3x3";
     }
-    if (params->height > 50 || params->width > 50) {
-        return "Maximum size is 50x50";
+    if (params->height * params->width > MAX_TILES) {
+        return MAX_TILES_ERROR;
     }
     if (params->aggressiveness < 1) {
         return "Aggressiveness must be a positive number";
@@ -411,35 +416,48 @@ static char solve_cell(const game_params *params, struct desc_cell *desc, struct
     int marked = 0, total = 0, blank = 0;
 
     if (sol[(y*params->width)+x].solved) {
-        return 1;
+        return 0;
     }
+    count_around(params, sol, x, y, &marked, &blank, &total);
     if (curr->full && curr->shown) {
         sol[(y*params->width)+x].solved = true;
+        if (marked+blank < total) {
+            sol[(y*params->width)+x].needed = true;
+        }
         mark_around(params, sol, x, y, STATE_MARKED);
         return 1;
     }
     if (curr->empty && curr->shown)
     {
         sol[(y*params->width)+x].solved = true;
+        if (marked+blank < total) {
+            sol[(y*params->width)+x].needed = true;
+        }
         mark_around(params, sol, x, y, STATE_BLANK);
         return 1;
     }
-    count_around(params, sol, x, y, &marked, &blank, &total);
     if (curr->shown) {
         if (!sol[(y*params->width)+x].solved) {
             if (marked == curr->clue) {
                 sol[(y*params->width)+x].solved = true;
+                if (total != marked + blank) {
+                    sol[(y*params->width)+x].needed = true;
+                }
                 mark_around(params, sol, x, y, STATE_BLANK);
             } else if (curr->clue == (total - blank)) {
                 sol[(y*params->width)+x].solved = true;
+                if (total != marked + blank) {
+                    sol[(y*params->width)+x].needed = true;
+                }
                 mark_around(params, sol, x, y, STATE_MARKED);
             } else if (total == marked + blank) {
                 return -1;
             } else {
                 return 0;
             }
+            return 1;
         }
-        return 1;
+        return 0;
     } else if (total == marked + blank) {
         sol[(y*params->width)+x].solved = true;
         return 1;
@@ -459,20 +477,22 @@ static char solve_cell(const game_params *params, struct desc_cell *desc, struct
     }
 }*/
 
-static bool solve_check(const game_params *params, struct desc_cell *desc) {
+static bool solve_check(const game_params *params, struct desc_cell *desc, random_state *rs, struct solution_cell **sol_return) {
     int x,y;
     struct solution_cell *sol = snewn(params->height*params->width, struct solution_cell);
     int solved = 0, iter = 0, curr = 0;
 
     memset(sol, 0, params->height*params->width * sizeof(struct solution_cell));
+    solved = 0;
     while (solved < params->height*params->width && iter < SOLVE_MAX_ITERATIONS) {
-        solved = 0;
         for (y=0; y< params->height; y++) {
             for (x=0; x < params->width; x++) {
-                curr = solve_cell(params, desc, sol, x, y);
+                curr = solve_cell(params, desc, sol, random_upto(rs, params->width), random_upto(rs, params->height));
                 if (curr < 0) {
                     iter = SOLVE_MAX_ITERATIONS;
+#ifdef DEBUG_PRINTS
                     printf("error in cell x=%d, y=%d\n", x, y);
+#endif
                     break;
                 }
                 solved += curr;
@@ -480,42 +500,40 @@ static bool solve_check(const game_params *params, struct desc_cell *desc) {
         }
         iter++;
     }
-    sfree(sol);
+    if (sol_return) {
+        *sol_return = sol;
+    } else {
+        sfree(sol);
+    }
     return solved == params->height*params->width;
 }
 
 static void hide_clues(const game_params *params, struct desc_cell *desc, random_state *rs){
-    int to_hideX, to_hideY, hidden, shown, total, tries = 0, x, y;
-    bool solveable = false;
+    int shown, total, x, y, needed = 0;
     struct desc_cell *curr;
-
+    struct solution_cell *sol = NULL, *curr_sol = NULL;
+    
+#ifdef DEBUG_PRINTS
     printf("Hiding clues\n");
-    while (!solveable && tries < 1000) {
-        for (hidden=0;hidden < ((params->height * params->width) * params->aggressiveness)/10;hidden++) {
-            to_hideX=random_upto(rs, params->width);
-            to_hideY=random_upto(rs, params->height);
-            count_clues_around(params, desc, to_hideX, to_hideY, &shown, &total);
-            if (shown > 1) {
-                curr = get_cords(params, desc, to_hideX, to_hideY);
+#endif
+    solve_check(params, desc, rs, &sol);
+    for (y=0; y< params->height; y++) {
+        for (x=0; x < params->width; x++) {
+            count_clues_around(params, desc, x, y, &shown, &total);                
+            curr = get_cords(params, desc, x, y);
+            curr_sol = get_cords(params, sol, x, y);
+            if (curr_sol->needed) {
+                needed++;
+            }
+            if (shown > 1 && curr_sol->needed == false) {
                 curr->shown=false;
-            }
-            solveable=solve_check(params, desc);
-            if (!solveable) {
-                curr->shown=true;
-            }
-        }
-        solveable=solve_check(params, desc);
-        if (solveable) {
-            break;
-        }
-        tries++;
-        for (y=0; y< params->height; y++) {
-            for (x=0; x < params->width; x++) {
-                curr = get_cords(params, desc, x, y);
-                curr->shown=true;
             }
         }
     }
+#ifdef DEBUG_PRINTS
+    printf("needed %d\n", needed);
+#endif
+    sfree(sol);
 }
 
 static bool start_point_check(size_t size, struct desc_cell *desc) {
@@ -544,6 +562,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     bool *image = snewn(params->height*params->width, bool);
     bool valid = false;
     char *desc_string = snewn((params->height*params->width)+1, char);
+    /*char *compressed_desc = snewn((params->height*params->width)+1, char);*/
 
     struct desc_cell* desc=snewn(params->height*params->width, struct desc_cell);    
     int x,y, location_in_str;
@@ -569,11 +588,15 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         }
         valid = start_point_check((params->height-1) * (params->width-1), desc);
         if (!valid) {
+#ifdef DEBUG_PRINTS
             printf("Not valid, regenerating.\n");
+#endif
         } else {
-            valid = solve_check(params, desc);
+            valid = solve_check(params, desc, rs, NULL);
             if (!valid) {
+#ifdef DEBUG_PRINTS
                 printf("Couldn't solve, regenerating.");
+#endif
             } else {
                 hide_clues(params, desc, rs);
             }
@@ -583,15 +606,21 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (y=0; y< params->height; y++) {
         for (x=0; x < params->width; x++) {
             if (desc[(y*params->width)+x].shown) {
+#ifdef DEBUG_PRINTS
                 printf("%d(%d)", desc[(y*params->width)+x].value, desc[(y*params->width)+x].clue);
+#endif
                 sprintf(desc_string + location_in_str, "%d", desc[(y*params->width)+x].clue);
             } else {
+#ifdef DEBUG_PRINTS
                 printf("%d( )", desc[(y*params->width)+x].value);
+#endif
                 sprintf(desc_string + location_in_str, " ");
             }
             location_in_str+=1;
         }
+#ifdef DEBUG_PRINTS
         printf("\n");
+#endif
     }
 
     return desc_string;
