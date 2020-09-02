@@ -21,7 +21,7 @@
 
 #define DEFAULT_SIZE 10
 #define DEFAULT_AGGRESSIVENESS 30
-#define SOLVE_MAX_ITERATIONS 2500
+#define SOLVE_MAX_ITERATIONS 250
 #define MAX_TILES 10000
 #define MAX_TILES_ERROR "Maximum size is 10000 tiles"
 #define DEFAULT_TILE_SIZE 32
@@ -562,7 +562,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     bool *image = snewn(params->height*params->width, bool);
     bool valid = false;
     char *desc_string = snewn((params->height*params->width)+1, char);
-    /*char *compressed_desc = snewn((params->height*params->width)+1, char);*/
+    char *compressed_desc = snewn((params->height*params->width)+1, char);
+    char space_count;
 
     struct desc_cell* desc=snewn(params->height*params->width, struct desc_cell);    
     int x,y, location_in_str;
@@ -622,14 +623,57 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         printf("\n");
 #endif
     }
-
-    return desc_string;
+    location_in_str = 0;
+    space_count='a'-1;
+    for (y=0; y< params->height; y++) {
+        for (x=0; x < params->width; x++) {
+            if (desc[(y*params->width)+x].shown) {
+                if (space_count >= 'a') {
+                    sprintf(compressed_desc + location_in_str, "%c", space_count);
+                    location_in_str++;
+                    space_count = 'a'-1; 
+                }
+                sprintf(compressed_desc + location_in_str, "%d", desc[(y*params->width)+x].clue);
+                location_in_str++;
+            } else {
+                if (space_count <= 'z') {
+                    space_count++;
+                } else {
+                    sprintf(compressed_desc + location_in_str, "%c", space_count);
+                    location_in_str++;
+                    space_count = 'a'-1;
+                }
+            }
+        }
+    }
+    compressed_desc[location_in_str] = '\0';
+    printf("compressed_desc: %s\n", compressed_desc);
+    return compressed_desc;
 }
 
 
 
 static const char *validate_desc(const game_params *params, const char *desc)
 {
+    int size_dest = params->height*params->width;
+    char *curr_desc = dupstr(desc);
+    char *desc_base = curr_desc;
+    int length;
+    length = 0;
+
+    while (*curr_desc != '\0')
+    {
+        if (*curr_desc >= 'a' && *curr_desc <= 'z') {
+            length += 1 + (*curr_desc-'a');
+        }
+        length++;
+        curr_desc++;
+    }
+
+    sfree(desc_base);
+    if (length != size_dest) {
+        return "Desc size mismatch";
+    }
     return NULL;
 }
 
@@ -639,9 +683,12 @@ static game_state *new_game(midend *me, const game_params *params,
     game_state *state = snew(game_state);
     char *curr_desc = dupstr(desc);
     char *desc_base = curr_desc;
+    int dest_loc;
+    int spaces, total_spaces;
 
     state->cheating = false;
     state->not_completed_clues = 0;
+    dest_loc = 0;
     state->height = params->height;
     state->width = params->width;
     state->cells_contents = snewn(params->height*params->width, char);
@@ -652,14 +699,28 @@ static game_state *new_game(midend *me, const game_params *params,
 
     while (*curr_desc != '\0') {
         if (*curr_desc >= '0' && *curr_desc <= '9'){
-            state->board->actual_board[curr_desc-desc_base].shown = true;
+            state->board->actual_board[dest_loc].shown = true;
             state->not_completed_clues++;
-            state->board->actual_board[curr_desc-desc_base].clue = *curr_desc - '0';
+            state->board->actual_board[dest_loc].clue = *curr_desc - '0';
         } else {
-            state->board->actual_board[curr_desc-desc_base].shown = false;
-            state->board->actual_board[curr_desc-desc_base].clue = -1;
+            if (*curr_desc != ' ') {
+                total_spaces = *curr_desc - 'a' + 1;
+            } else {
+                total_spaces = 1;
+            }
+            spaces = 0;
+            while (spaces < total_spaces)
+            {
+                state->board->actual_board[dest_loc].shown = false;
+                state->board->actual_board[dest_loc].clue = -1;
+                spaces++;
+                if (spaces < total_spaces) {
+                    dest_loc++;
+                }
+            }
         }
         curr_desc++;
+        dest_loc++;
     }
 
     sfree(desc_base);
