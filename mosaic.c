@@ -646,6 +646,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             }
         }
     }
+    if (space_count >= 'a') {
+        sprintf(compressed_desc + location_in_str, "%c", space_count);
+        location_in_str++;
+    }
     compressed_desc[location_in_str] = '\0';
     printf("compressed_desc: %s\n", compressed_desc);
     return compressed_desc;
@@ -664,7 +668,7 @@ static const char *validate_desc(const game_params *params, const char *desc)
     while (*curr_desc != '\0')
     {
         if (*curr_desc >= 'a' && *curr_desc <= 'z') {
-            length += 1 + (*curr_desc-'a');
+            length += *curr_desc-'a';
         }
         length++;
         curr_desc++;
@@ -821,7 +825,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     char move_type;
     char move_desc[15] = "";
     char *ret = NULL;
-    if (button == LEFT_BUTTON || button == RIGHT_BUTTON) {
+    if (state->not_completed_clues > 0 && (button == LEFT_BUTTON || button == RIGHT_BUTTON)) {
         gameX=(x-(ds->tilesize/2))/ds->tilesize;
         gameY=(y-(ds->tilesize/2))/ds->tilesize;
         if (button == RIGHT_BUTTON) {
@@ -1082,7 +1086,12 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     draw_update(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize);
     sprintf(status, "Clues left: %d", state->not_completed_clues);
     if (state->not_completed_clues == 0) {
-        sprintf(status, "Completed!!!");
+        sprintf(status, "COMPLETED!");
+#ifdef ANDROID
+        if (!flashtime) {
+            android_completed();
+        }
+#endif
     }
     status_bar(dr, dupstr(status));
 }
@@ -1131,7 +1140,7 @@ static void android_cursor_visibility(game_ui *ui, int visible) {
 #endif
 
 const struct game thegame = {
-    "Mosaic", NULL, NULL,
+    "Mosaic", NULL, "mosaic",
     default_params,
     game_fetch_preset, NULL,
     decode_params,
