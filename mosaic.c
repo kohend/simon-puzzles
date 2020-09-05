@@ -53,14 +53,16 @@ enum {
 
 enum cell_state {
     STATE_UNMARKED = 0,
-    STATE_MARKED,
-    STATE_BLANK,
-    STATE_UNMARKED_ERROR,
-    STATE_MARKED_ERROR,
-    STATE_BLANK_ERROR,
-    STATE_BLANK_SOLVED,
-    STATE_MARKED_SOLVED,
-    STATE_OK_NUM = STATE_UNMARKED_ERROR
+    STATE_MARKED = 1,
+    STATE_BLANK = 2,
+    STATE_SOLVED = 4,
+    STATE_ERROR = 8,
+    STATE_UNMARKED_ERROR = STATE_ERROR | STATE_UNMARKED,
+    STATE_MARKED_ERROR = STATE_ERROR | STATE_MARKED,
+    STATE_BLANK_ERROR = STATE_ERROR | STATE_BLANK,
+    STATE_BLANK_SOLVED = STATE_SOLVED | STATE_BLANK,
+    STATE_MARKED_SOLVED = STATE_MARKED | STATE_SOLVED,
+    STATE_OK_NUM = STATE_BLANK | STATE_MARKED
 };
 
 struct game_params {
@@ -132,7 +134,7 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
     if (i < 0 || i > 5) {
         return false;
     }
-    const int levels[6] = {3, 1, 2, 2, 3, 4};
+    const int levels[6] = {3, 1, 3, 2, 3, 4};
     game_params *res = snew(game_params);
     res->height = sizes[i];
     res->width = sizes[i];
@@ -246,7 +248,7 @@ static const char *validate_params(const game_params *params, bool full)
     if (params->height * params->width > MAX_TILES) {
         return MAX_TILES_ERROR;
     }
-    if (params->level < 1) {
+    if (params->level < 0) {
         return "Level must be a positive number";
     }
     return NULL;
@@ -344,9 +346,9 @@ static void count_around(const game_params *params, struct solution_cell *sol, i
             curr=get_cords(params, sol, x+i, y+j);
             if (curr) {
                 (*total)++;
-                if (curr->cell == STATE_BLANK) {
+                if ((curr->cell & STATE_BLANK) != 0) {
                     (*blank)++;
-                } else if (curr->cell == STATE_MARKED) {
+                } else if ((curr->cell & STATE_MARKED) != 0) {
                     (*marked)++;
                 }
             }
@@ -366,9 +368,9 @@ static void count_around_state(const game_state *state, int x, int y, int *marke
             curr=get_cords(state, state->cells_contents, x+i, y+j);
             if (curr) {
                 (*total)++;
-                if (*curr == STATE_BLANK || *curr == STATE_BLANK_SOLVED || *curr == STATE_BLANK_ERROR) {
+                if ((*curr & STATE_BLANK) != 0) {
                     (*blank)++;
-                } else if (*curr == STATE_MARKED || *curr == STATE_MARKED_SOLVED || *curr == STATE_MARKED_ERROR) {
+                } else if ((*curr & STATE_MARKED)!=0) {
                     (*marked)++;
                 }
             }
@@ -551,17 +553,55 @@ static bool solve_game_actual(const game_params *params, struct board_cell *desc
 
 
 static void hide_clues(const game_params *params, struct desc_cell *desc, random_state *rs){
-    int shown, total, x, y;
+    int shown, total, x, y, count1 = 0, count2 = 0, count3 = 0;
 #ifdef DEBUG_PRINTS
     int needed = 0;
 #endif
     struct desc_cell *curr;
-    struct solution_cell *sol = NULL, *curr_sol = NULL;
+    struct solution_cell *sol = NULL, *sol2 = NULL, *sol3 = NULL, *curr_sol = NULL;
     
 #ifdef DEBUG_PRINTS
     printf("Hiding clues\n");
 #endif
     solve_check(params, desc, rs, &sol);
+    if (params->level == 0) {
+        solve_check(params, desc, rs, &sol2);
+        solve_check(params, desc, rs, &sol3);
+        for (y=0; y< params->height; y++) {
+            for (x=0; x < params->width; x++) {
+                curr_sol = get_cords(params, sol, x, y);
+                if (curr_sol->needed) {
+                    count1++;
+                }
+                curr_sol = get_cords(params, sol2, x, y);
+                if (curr_sol->needed) {
+                    count2++;
+                }
+                curr_sol = get_cords(params, sol3, x, y);
+                if (curr_sol->needed) {
+                    count3++;
+                }
+            }
+        }
+        if (count1 <= count2) {
+            sfree(sol2);
+            if (count1 <= count3) {
+                sfree(sol3);
+            } else if (count1 > count3) {
+                sfree(sol);
+                sol=sol3;
+            }
+        } else {
+            sfree(sol);
+            if (count2 <= count3) {
+                sfree(sol3);
+                sol = sol2;
+            } else {
+                sfree(sol3);
+                sol = sol3;
+            }
+        }
+    }
     for (y=0; y< params->height; y++) {
         for (x=0; x < params->width; x++) {
             count_clues_around(params, desc, x, y, &shown, &total);                
@@ -573,7 +613,7 @@ static void hide_clues(const game_params *params, struct desc_cell *desc, random
             }
 #endif
             if (shown > 1 && curr_sol->needed == false) {
-                if (random_upto(rs, params->level) <= 1) {
+                if (!params->level || random_upto(rs, params->level) <= 1) {
                     curr->shown=false;
                 }
             }
@@ -945,50 +985,13 @@ static void update_board_state_around(game_state *state, int x, int y) {
                 curr_state = get_cords(state, state->cells_contents, x+i, y+j);
                 count_around_state(state, x+i, y+j, &marked, &blank, &total);
                 if (curr->clue == marked && (total - marked - blank) == 0) {
-                    switch (*curr_state)
-                    {
-                    case STATE_BLANK:
-                    case STATE_BLANK_ERROR:
-                        *curr_state = STATE_BLANK_SOLVED;
-                        break;
-                    case STATE_MARKED:
-                    case STATE_MARKED_ERROR:
-                        *curr_state = STATE_MARKED_SOLVED;
-                        break;
-                    default:
-                        break;
-                    }
+                    *curr_state &= STATE_MARKED | STATE_BLANK;
+                    *curr_state |= STATE_SOLVED;
                 } else if (curr->clue < marked || curr->clue > (total - blank)) {
-                    switch (*curr_state)
-                    {
-                    case STATE_BLANK_SOLVED:
-                    case STATE_BLANK:
-                        *curr_state = STATE_BLANK_ERROR;
-                        break;
-                    case STATE_MARKED_SOLVED:
-                    case STATE_MARKED:
-                        *curr_state = STATE_MARKED_ERROR;
-                        break;
-                    default:
-                        break;
-                    }
+                    *curr_state &= STATE_MARKED | STATE_BLANK;
+                    *curr_state |= STATE_ERROR;
                 } else {
-                    switch (*curr_state)
-                    {
-                    case STATE_BLANK_SOLVED:
-                    case STATE_BLANK_ERROR:
-                        *curr_state = STATE_BLANK;
-                        break;
-                    case STATE_MARKED_SOLVED:
-                    case STATE_MARKED_ERROR:
-                        *curr_state = STATE_MARKED;
-                        break;
-                    case STATE_UNMARKED_ERROR:
-                        *curr_state = STATE_UNMARKED;
-                        break;
-                    default:
-                        break;
-                    }
+                    *curr_state &= STATE_MARKED | STATE_BLANK;
                 }
             }
         }
@@ -1021,7 +1024,7 @@ static game_state *execute_move(const game_state *state, const char *move)
             y = atol(coordinate);
             cell = get_cords(new_state, new_state->cells_contents, x, y);
             if (*cell >= STATE_OK_NUM) {
-                *cell -= 3;
+                *cell &= STATE_OK_NUM;
             }
             *cell = (*cell + steps) % STATE_OK_NUM;
             update_board_state_around(new_state, x, y);
@@ -1030,7 +1033,7 @@ static game_state *execute_move(const game_state *state, const char *move)
                 for (x=0; x < state->width; x++) {
                     cell = get_cords(new_state, new_state->cells_contents, x, y);
                     curr_cell = get_cords(new_state, new_state->board->actual_board, x, y);
-                    if (curr_cell->shown && *cell <= STATE_BLANK_ERROR) {
+                    if (curr_cell->shown && ((*cell & STATE_SOLVED) == 0)) {
                         clues_left++;
                     }
                 }
@@ -1198,7 +1201,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BACKGROUND);
     }
     for (y=0;y<state->height;y++) {
-        for (x=0;x<state->height;x++) {
+        for (x=0;x<state->width;x++) {
             draw_cell(dr, ds, state, x, y);
         }
     }
