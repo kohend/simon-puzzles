@@ -113,6 +113,7 @@ struct game_ui
 {
     bool solved;
     bool in_progress;
+    int last_x, last_y, last_state;
 };
 
 
@@ -612,7 +613,7 @@ static void hide_clues(const game_params *params, struct desc_cell *desc, random
                 needed++;
             }
 #endif
-            if (shown > 1 && curr_sol->needed == false) {
+            if (curr_sol->needed == false) {
                 if (!params->level || random_upto(rs, params->level) <= 1) {
                     curr->shown=false;
                 }
@@ -920,11 +921,17 @@ static char *game_text_format(const game_state *state)
 
 static game_ui *new_ui(const game_state *state)
 {
-    return NULL;
+    game_ui *ui = snew(game_ui);
+    ui->last_x = -1;
+    ui->last_y = -1;
+    ui->last_state = 0;
+    ui->solved = false;
+    return ui;
 }
 
 static void free_ui(game_ui *ui)
 {
+    sfree(ui);
 }
 
 static char *encode_ui(const game_ui *ui)
@@ -934,6 +941,10 @@ static char *encode_ui(const game_ui *ui)
 
 static void decode_ui(game_ui *ui, const char *encoding)
 {
+    ui->last_x = -1;
+    ui->last_y = -1;
+    ui->last_state = 0;
+    ui->solved = false;
 }
 
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
@@ -951,20 +962,57 @@ static char *interpret_move(const game_state *state, game_ui *ui,
 {
     int gameX, gameY;
     char move_type;
-    char move_desc[15] = "";
+    char move_desc[30] = "";
     char *ret = NULL;
-    if (state->not_completed_clues > 0 && (button == LEFT_BUTTON || button == RIGHT_BUTTON)) {
-        gameX=(x-(ds->tilesize/2))/ds->tilesize;
-        gameY=(y-(ds->tilesize/2))/ds->tilesize;
+    const char *cell_state;
+    if (state->not_completed_clues == 0) {
+        return NULL;
+    }
+    gameX = (x-(ds->tilesize/2))/ds->tilesize;
+    gameY = (y-(ds->tilesize/2))/ds->tilesize;
+    if (button == LEFT_BUTTON || button == RIGHT_BUTTON) {
+        cell_state = get_cords(state, state->cells_contents, gameX, gameY);
+        if (cell_state) {
+            ui->last_state = *cell_state & (STATE_BLANK | STATE_MARKED);
+            ui->last_state = (ui->last_state + ((button == RIGHT_BUTTON) ? 2 : 1)) % (STATE_BLANK | STATE_MARKED);
+        }
         if (button == RIGHT_BUTTON) {
             /* Right button toggles twice */
             move_type = 'T';
         } else {
             move_type = 't';
         }
-        sprintf(move_desc, "%c%d,%d", move_type, gameX, gameY);
         if (gameX >= 0 && gameY >= 0 && gameX < state->width && gameY < state->height) {
+            sprintf(move_desc, "%c%d,%d", move_type, gameX, gameY);
+            ui->last_x = gameX;
+            ui->last_y = gameY;
             ret = dupstr(move_desc);
+        } else {
+            ui->last_x = -1;
+            ui->last_y = -1;
+        }
+    } else if (button == LEFT_DRAG || button == RIGHT_DRAG) {
+        move_type = 'd';
+        /* allowing only drags in straight lines */
+        if (gameX >= 0 && gameY >= 0 && gameX < state->width && gameY < state->height && ui->last_x >= 0 && ui->last_y >= 0 &&
+            (gameY == ui->last_y || gameX == ui->last_x)) {
+            sprintf(move_desc, "%c%d,%d,%d,%d,%d", move_type, gameX, gameY, ui->last_x, ui->last_y, ui->last_state);
+            ui->last_x = gameX;
+            ui->last_y = gameY;
+            ret = dupstr(move_desc);
+        } else {
+            ui->last_x = -1;
+            ui->last_y = -1;
+        }
+    } else if (button == LEFT_RELEASE|| button == RIGHT_RELEASE) {
+        move_type = 'e';
+        if (gameX >= 0 && gameY >= 0 && gameX < state->width && gameY < state->height && ui->last_x >= 0 && ui->last_y >= 0 &&
+        (gameY == ui->last_y || gameX == ui->last_x)) {
+            sprintf(move_desc, "%c%d,%d,%d,%d,%d", move_type, gameX, gameY, ui->last_x, ui->last_y, ui->last_state);
+            ret = dupstr(move_desc);
+        } else {
+            ui->last_x = -1;
+            ui->last_y = -1;
         }
     }
     return ret;
@@ -998,19 +1046,20 @@ static void update_board_state_around(game_state *state, int x, int y) {
     }
 }
 
+
+
 static game_state *execute_move(const game_state *state, const char *move)
 {
     game_state *new_state = dup_game(state);
-    int i = 0, x, y, clues_left = 0, size = state->height * state->width;
+    int i = 0, x = -1, y = -1, clues_left = 0;
+    int srcX = -1, srcY = -1, size = state->height * state->width;
     char *comma, *cell, sol_char;
-    char coordinate[12] = "";
-    int steps = 1, bits, sol_location;
+    char coordinate[30] = "";
+    int steps = 1, bits, sol_location, dirX, dirY, diff, last_state;
     unsigned int sol_value;
     struct board_cell *curr_cell;
-    if (move[0] == 't' || move[0] == 'T') {
-        if (move[0] == 'T') {
-            steps++;
-        }
+    /* Check location */
+    if (move[0] == 't' || move[0] == 'T' || move[0] == 'd' || move[0] == 'e') {
         i++;
         comma=strchr(move + i, ',');
         if (comma != NULL) {
@@ -1020,26 +1069,40 @@ static game_state *execute_move(const game_state *state, const char *move)
             i = comma - move;
             i++;
             memset(coordinate, 0, sizeof(char)*12);
-            strcpy(coordinate, move + i);
-            y = atol(coordinate);
-            cell = get_cords(new_state, new_state->cells_contents, x, y);
-            if (*cell >= STATE_OK_NUM) {
-                *cell &= STATE_OK_NUM;
+            comma=strchr(move + i, ',');
+            if (comma) {
+                strncpy(coordinate, move + i, comma - move - 1);
+                y = atol(coordinate);
+                i+=2;
+                comma=strchr(move + i, ',');
+                strncpy(coordinate, move + i, comma - move - 1);
+                srcX = atol(coordinate);
+                i+=2;
+                comma=strchr(move + i, ',');
+                strncpy(coordinate, move + i, comma - move - 1);
+                srcY = atol(coordinate);
+                i+=2;
+                strcpy(coordinate, move + i);
+                last_state = atol(coordinate);
+            } else {
+                strcpy(coordinate, move + i);
+                y = atol(coordinate);
             }
-            *cell = (*cell + steps) % STATE_OK_NUM;
-            update_board_state_around(new_state, x, y);
-            
-            for (y=0; y < state->height; y++) {
-                for (x=0; x < state->width; x++) {
-                    cell = get_cords(new_state, new_state->cells_contents, x, y);
-                    curr_cell = get_cords(new_state, new_state->board->actual_board, x, y);
-                    if (curr_cell->shown && ((*cell & STATE_SOLVED) == 0)) {
-                        clues_left++;
-                    }
-                }
-            }
-            new_state->not_completed_clues=clues_left;
         }
+    }
+    if (move[0] == 't' || move[0] == 'T') {
+        if (move[0] == 'T') {
+            steps++;
+        }
+        if (x==-1 || y==-1) {
+            return new_state;
+        }
+        cell = get_cords(new_state, new_state->cells_contents, x, y);
+        if (*cell >= STATE_OK_NUM) {
+            *cell &= STATE_OK_NUM;
+        }
+        *cell = (*cell + steps) % STATE_OK_NUM;
+        update_board_state_around(new_state, x, y);
     } else if (move[0] == 's') {
         new_state->not_completed_clues = 0;
         new_state->cheating = true;
@@ -1070,7 +1133,45 @@ static game_state *execute_move(const game_state *state, const char *move)
                 sol_location++;
             }
         }
+        return new_state;
+    } else if (move[0] == 'd' || move[0] == 'e') {
+        if (srcX == x && srcY != y) {
+            dirX = 0;
+            diff = srcY - y;
+            if (diff < 0) {
+                dirY = -1;
+                diff *= -1;
+            } else {
+                dirY = 1;
+            }
+        } else {
+            diff = srcX - x;
+            dirY = 0;
+            if (diff < 0) {
+                dirX = -1;
+                diff *= -1;
+            } else {
+                dirX = 1;
+            }
+        }
+        for (i =  0 ; i < diff; i++) {
+            cell =  get_cords(new_state, new_state->cells_contents, x + (dirX * i), y + (dirY * i));
+            if ((*cell & STATE_OK_NUM) == 0) {
+                *cell = last_state;
+                update_board_state_around(new_state, x + (dirX * i), y + (dirY * i));
+            } 
+        }
     }
+    for (y=0; y < state->height; y++) {
+        for (x=0; x < state->width; x++) {
+            cell = get_cords(new_state, new_state->cells_contents, x, y);
+            curr_cell = get_cords(new_state, new_state->board->actual_board, x, y);
+            if (curr_cell->shown && ((*cell & STATE_SOLVED) == 0)) {
+                clues_left++;
+            }
+        }
+    }
+    new_state->not_completed_clues=clues_left;
     return new_state;
 }
 
@@ -1126,51 +1227,34 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 
 static void draw_cell(drawing *dr, game_drawstate *ds,
                     const game_state *state,
-                    int x, int y) {
+                    int x, int y, bool flashing) {
     const int ts = ds->tilesize;
     int startX = ((x * ts) + ts/2)-1, startY = ((y * ts)+ ts/2)-1;
     int color, text_color = COL_TEXT_DARK;
     
     char *cell_p = get_cords(state, state->cells_contents, x, y);
     char cell = *cell_p;
+    if (flashing) {
+        cell ^= (STATE_BLANK | STATE_MARKED);
+    }
     draw_rect_outline(dr, startX-1, startY-1, ts+1, ts+1, COL_GRID);
 
-    switch (cell)
-    {
-    case STATE_MARKED:
+    if (cell & STATE_MARKED) {
         color = COL_MARKED;
         text_color = COL_TEXT_LIGHT;
-        break;    
-    case STATE_MARKED_SOLVED:
-        text_color = COL_TEXT_SOLVED;
-        color = COL_MARKED;
-        break;
-    case STATE_BLANK:
+    } else if (cell & STATE_BLANK) {
         text_color = COL_TEXT_DARK;
         color = COL_BLANK;
-        break;
-    case STATE_BLANK_SOLVED:
-        color = COL_BLANK;
-        text_color = COL_TEXT_SOLVED;
-        break;
-    case STATE_BLANK_ERROR:
-        color = COL_BLANK;
-        text_color = COL_ERROR;
-        break;
-    case STATE_MARKED_ERROR:
-        text_color = COL_ERROR;
-        color = COL_MARKED;
-        break;
-    case STATE_UNMARKED_ERROR:
-        text_color = COL_ERROR;
-        color = COL_UNMARKED;
-        break;
-    default:
+    } else {
         text_color = COL_TEXT_DARK;
         color = COL_UNMARKED;
-        break;
     }
-    
+    if (cell & STATE_ERROR) {
+        text_color = COL_ERROR;
+    } else if (cell & STATE_SOLVED) {
+        text_color = COL_TEXT_SOLVED;
+    }
+
     draw_rect(dr, startX, startY, ts-1, ts-1, color);
     struct board_cell *curr = NULL;
     char clue[5];
@@ -1202,7 +1286,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     }
     for (y=0;y<state->height;y++) {
         for (x=0;x<state->width;x++) {
-            draw_cell(dr, ds, state, x, y);
+            draw_cell(dr, ds, state, x, y, flashtime > 0);
         }
     }
     draw_update(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize);
