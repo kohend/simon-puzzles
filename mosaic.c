@@ -1293,11 +1293,6 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     sprintf(status, "Clues left: %d", state->not_completed_clues);
     if (state->not_completed_clues == 0 && !state->cheating) {
         sprintf(status, "COMPLETED!");
-#ifdef ANDROID
-        if (!flashtime) {
-            android_completed();
-        }
-#endif
     } else if (state->not_completed_clues == 0 && state->cheating) {
         sprintf(status, "Auto solved");
     }
@@ -1337,11 +1332,6 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 {
 }
 
-#ifdef ANDROID
-static void android_cursor_visibility(game_ui *ui, int visible) {
-
-}
-#endif
 
 #ifdef COMBINED
 #define thegame mosaic
@@ -1369,9 +1359,6 @@ const struct game thegame = {
     encode_ui,
     decode_ui,
     NULL, /* game_request_keys */
-#ifdef ANDROID
-    android_cursor_visibility,
-#endif
     game_changed_state,
     interpret_move,
     execute_move,
