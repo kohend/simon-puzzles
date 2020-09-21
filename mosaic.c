@@ -20,8 +20,6 @@
 #include "puzzles.h"
 
 #define DEFAULT_SIZE 10
-#define DEFAULT_LEVEL 3
-#define SOLVE_MAX_ITERATIONS 250
 #define MAX_TILES 10000
 #define MAX_TILES_ERROR "Maximum size is 10000 tiles"
 #define DEFAULT_TILE_SIZE 32
@@ -68,11 +66,17 @@ enum cell_state {
 struct game_params {
     int width;
     int height;
-    int level;
     bool advanced;
 };
 
 typedef struct board_state board_state;
+
+typedef struct needed_list_item needed_list_item;
+
+struct needed_list_item {
+    int x, y;
+    needed_list_item *next;
+};
 
 struct game_state {
     bool cheating;
@@ -124,7 +128,6 @@ static game_params *default_params(void)
     ret->width = DEFAULT_SIZE;
     ret->height = DEFAULT_SIZE;
     ret->advanced = false;
-    ret->level = DEFAULT_LEVEL;
 
     return ret;
 }
@@ -135,15 +138,13 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
     if (i < 0 || i > 5) {
         return false;
     }
-    const int levels[6] = {3, 1, 3, 2, 3, 4};
     game_params *res = snew(game_params);
     res->height = sizes[i];
     res->width = sizes[i];
-    res->level = levels[i];
     res->advanced = false;
     *params=res;
     char *value = snewn(25, char);
-    sprintf(value, "Size: %dx%d, level: %d", sizes[i], sizes[i], levels[i]);
+    sprintf(value, "Size: %dx%d", sizes[i], sizes[i]);
     *name = value;
     return true;
 }
@@ -172,15 +173,13 @@ static void decode_params(game_params *params, char const *string)
     strncpy(temp, string, curr-string);
     params->width = atol(temp);
     prev = curr;
-    curr = strchr(string, 'l');
-    if (curr) {
-        strncpy(temp, prev + 1, curr - prev);
-        params->height = atol(temp);
-    } else {
-        curr = strchr(string, 'a');
-        strncpy(temp, prev + 1, curr - prev);
-        params->height = atol(temp);
+    curr = strchr(string, 'a');
+    if (!curr) {
+        curr = prev + strlen(curr) - 1;
     }
+    strncpy(temp, prev + 1, curr - prev);
+    params->height = atol(temp);
+
     curr++;
     while (*curr != 'a' && *curr != '\0')
     {
@@ -189,23 +188,22 @@ static void decode_params(game_params *params, char const *string)
         curr++;
     }
     temp[loc] = '\0';
-    params->level = atol(temp);
 }
 
 static char *encode_params(const game_params *params, bool full)
 {
     char encoded[20] = "";
     if (full) {
-        sprintf(encoded, "%dx%dl%da%d", params->width, params->height, params->level, params->advanced);
-    } else {
         sprintf(encoded, "%dx%da%d", params->width, params->height, params->advanced);
+    } else {
+        sprintf(encoded, "%dx%d", params->width, params->height);
     }
     return dupstr(encoded);
 }
 
 static config_item *game_configure(const game_params *params)
 {
-    config_item *config = snewn(5, config_item);
+    config_item *config = snewn(4, config_item);
     char *value = snewn(12, char);
     config[0].type=C_STRING;
     config[0].name="Height";
@@ -216,15 +214,10 @@ static config_item *game_configure(const game_params *params)
     config[1].name="Width";
     sprintf(value,"%d", params->width);
     config[1].u.string.sval=value;
-    value = snewn(12, char);
-    config[2].type=C_STRING;
-    config[2].name="Level";
-    sprintf(value,"%d", params->level);
-    config[2].u.string.sval=value;
-    config[3].name="Advanced (unsupported)";
-    config[3].type=C_BOOLEAN;
-    config[3].u.boolean.bval = params->advanced;
-    config[4].type=C_END;
+    config[2].name="Advanced (unsupported)";
+    config[2].type=C_BOOLEAN;
+    config[2].u.boolean.bval = params->advanced;
+    config[3].type=C_END;
     return config;
 }
 
@@ -233,8 +226,7 @@ static game_params *custom_params(const config_item *cfg)
     game_params *res = snew(game_params);
     res->height=atol(cfg[0].u.string.sval);
     res->width=atol(cfg[1].u.string.sval);
-    res->level=atol(cfg[2].u.string.sval);
-    res->advanced=cfg[3].u.boolean.bval;
+    res->advanced=cfg[2].u.boolean.bval;
     return res;
 }
 
@@ -248,9 +240,6 @@ static const char *validate_params(const game_params *params, bool full)
     }
     if (params->height * params->width > MAX_TILES) {
         return MAX_TILES_ERROR;
-    }
-    if (params->level < 0) {
-        return "Level must be a positive number";
     }
     return NULL;
 }
@@ -483,61 +472,90 @@ static char solve_cell(const game_params *params, struct desc_cell *desc, struct
 }
 
 static bool solve_check(const game_params *params, struct desc_cell *desc, random_state *rs, struct solution_cell **sol_return) {
-    int x,y;
-    struct solution_cell *sol = snewn(params->height*params->width, struct solution_cell);
-    int solved = 0, iter = 0, curr = 0;
+    int x,y, xRand, yRand;
+    int board_size = params->height*params->width;
+    struct solution_cell *sol = snewn(board_size, struct solution_cell);
+    bool *checked = snewn(board_size, bool), *cell_checked = NULL;
+    bool made_progress = true, error = false;
+    int solved = 0, curr = 0;
 
-    memset(sol, 0, params->height*params->width * sizeof(struct solution_cell));
+    memset(sol, 0, board_size * sizeof(struct solution_cell));
     solved = 0;
-    while (solved < params->height*params->width && iter < SOLVE_MAX_ITERATIONS) {
+    while (solved < board_size && made_progress && !error) {
+        memset(checked, 0, board_size*sizeof(bool));
+        made_progress = false;
         for (y=0; y< params->height; y++) {
             for (x=0; x < params->width; x++) {
                 if (rs) {
-                    curr = solve_cell(params, desc, NULL, sol, random_upto(rs, params->width), random_upto(rs, params->height));
+                    while (cell_checked == NULL || *cell_checked == true) {
+                        xRand = random_upto(rs, params->width);
+                        yRand = random_upto(rs, params->height);
+                        cell_checked = get_cords(params, checked, xRand, yRand);
+                    }
+                    curr = solve_cell(params, desc, NULL, sol, xRand, yRand);
+                    *cell_checked = true;
+                    cell_checked = NULL;
                 } else {
-                    curr = solve_cell(params, desc, NULL, sol, x, y);    
+                    curr = solve_cell(params, desc, NULL, sol, x, y);
                 }
                 if (curr < 0) {
-                    iter = SOLVE_MAX_ITERATIONS;
+                    error = true;
 #ifdef DEBUG_PRINTS
                     printf("error in cell x=%d, y=%d\n", x, y);
 #endif
                     break;
                 }
-                solved += curr;
+                if (curr > 0) {
+                    solved++;
+                    made_progress = true;
+                }
             }
         }
-        iter++;
+
     }
     if (sol_return) {
         *sol_return = sol;
     } else {
         sfree(sol);
     }
-    return solved == params->height*params->width;
+    sfree(checked);
+    return solved == board_size;
 }
 
 static bool solve_game_actual(const game_params *params, struct board_cell *desc, random_state *rs, struct solution_cell **sol_return) {
-    int x,y;
-    struct solution_cell *sol = snewn(params->height*params->width, struct solution_cell);
+    int x, y, xRand, yRand;
+    int board_size = params->height*params->width;
+    struct solution_cell *sol = snewn(board_size, struct solution_cell);
+    bool *checked = snewn(board_size, bool), *cell_checked = NULL;
+    bool made_progress = true, error = false;
     int solved = 0, iter = 0, curr = 0;
 
     memset(sol, 0, params->height*params->width * sizeof(struct solution_cell));
     solved = 0;
-    while (solved < params->height*params->width && iter < SOLVE_MAX_ITERATIONS) {
+    while (solved < params->height*params->width && made_progress && !error) {
         for (y=0; y< params->height; y++) {
             for (x=0; x < params->width; x++) {
                 if (rs) {
-                    curr = solve_cell(params, NULL, desc, sol, random_upto(rs, params->width), random_upto(rs, params->height));
+                    while (cell_checked == NULL || *cell_checked == true) {
+                        xRand = random_upto(rs, params->width);
+                        yRand = random_upto(rs, params->height);
+                        cell_checked = get_cords(params, checked, xRand, yRand);
+                    }
+                    curr = solve_cell(params, NULL, desc, sol, xRand, yRand);
+                    *cell_checked = true;
+                    cell_checked = NULL;
                 } else {
                     curr = solve_cell(params, NULL, desc, sol, x, y);    
                 }
                 if (curr < 0) {
-                    iter = SOLVE_MAX_ITERATIONS;
+                    error = true;
 #ifdef DEBUG_PRINTS
                     printf("error in cell x=%d, y=%d\n", x, y);
 #endif
                     break;
+                }
+                if (curr > 0) {
+                    made_progress = true;
                 }
                 solved += curr;
             }
@@ -552,74 +570,63 @@ static bool solve_game_actual(const game_params *params, struct board_cell *desc
     return solved == params->height*params->width;
 }
 
-
 static void hide_clues(const game_params *params, struct desc_cell *desc, random_state *rs){
-    int shown, total, x, y, count1 = 0, count2 = 0, count3 = 0;
-#ifdef DEBUG_PRINTS
+    int shown, total, x, y, i, rand_cell;
     int needed = 0;
-#endif
     struct desc_cell *curr;
-    struct solution_cell *sol = NULL, *sol2 = NULL, *sol3 = NULL, *curr_sol = NULL;
+    struct solution_cell *sol = NULL, *curr_sol = NULL;
+    needed_list_item *head = NULL, *curr_needed, **needed_array;
     
 #ifdef DEBUG_PRINTS
     printf("Hiding clues\n");
 #endif
     solve_check(params, desc, rs, &sol);
-    if (params->level == 0) {
-        solve_check(params, desc, rs, &sol2);
-        solve_check(params, desc, rs, &sol3);
-        for (y=0; y< params->height; y++) {
-            for (x=0; x < params->width; x++) {
-                curr_sol = get_cords(params, sol, x, y);
-                if (curr_sol->needed) {
-                    count1++;
-                }
-                curr_sol = get_cords(params, sol2, x, y);
-                if (curr_sol->needed) {
-                    count2++;
-                }
-                curr_sol = get_cords(params, sol3, x, y);
-                if (curr_sol->needed) {
-                    count3++;
-                }
-            }
-        }
-        if (count1 <= count2) {
-            sfree(sol2);
-            if (count1 <= count3) {
-                sfree(sol3);
-            } else if (count1 > count3) {
-                sfree(sol);
-                sol=sol3;
-            }
-        } else {
-            sfree(sol);
-            if (count2 <= count3) {
-                sfree(sol3);
-                sol = sol2;
-            } else {
-                sfree(sol3);
-                sol = sol3;
-            }
-        }
-    }
     for (y=0; y< params->height; y++) {
         for (x=0; x < params->width; x++) {
             count_clues_around(params, desc, x, y, &shown, &total);                
             curr = get_cords(params, desc, x, y);
             curr_sol = get_cords(params, sol, x, y);
-#ifdef DEBUG_PRINTS
             if (curr_sol->needed) {
+                curr_needed = snew(needed_list_item);
+                curr_needed->x = x;
+                curr_needed->y = y;
+                curr_needed->next = head;
+                head=curr_needed;
                 needed++;
-            }
-#endif
-            if (curr_sol->needed == false) {
-                if (!params->level || random_upto(rs, params->level) <= 1) {
-                    curr->shown=false;
-                }
+            } else {
+                curr->shown=false;
             }
         }
     }
+    curr_needed = head;
+    needed_array = snewn(needed, needed_list_item*);
+    memset(needed_array, 0, needed * sizeof(needed_list_item*));
+    i = 0;
+    while (curr_needed) {
+        needed_array[i] = curr_needed;
+        curr_needed = curr_needed->next;
+        i++;
+    }
+    for (i=0; i < needed ; i++) {
+        while (curr_needed == NULL) {
+            rand_cell = random_upto(rs, needed);
+            curr_needed = needed_array[rand_cell];
+        }
+        curr = get_cords(params, desc, curr_needed->x, curr_needed->y);
+        if (curr) {
+            curr->shown = false;
+            if (!solve_check(params, desc, NULL, NULL)) {
+#ifdef DEBUG_PRINTS
+                printf("Hiding cell %d, %d not possible.\n", curr_needed->x, curr_needed->y);
+#endif
+                curr->shown = true;
+            }
+            sfree(curr_needed);
+            needed_array[rand_cell]=NULL;
+        }
+        curr_needed=NULL;
+    }
+    sfree(needed_array);
 #ifdef DEBUG_PRINTS
     printf("needed %d\n", needed);
 #endif
@@ -1133,15 +1140,15 @@ static game_state *execute_move(const game_state *state, const char *move)
             if (comma) {
                 strncpy(coordinate, move + i, comma - move - 1);
                 y = atol(coordinate);
-                i+=2;
+                i = 1 + comma - move;
                 comma=strchr(move + i, ',');
                 strncpy(coordinate, move + i, comma - move - 1);
                 srcX = atol(coordinate);
-                i+=2;
+                i = 1 + comma - move;
                 comma=strchr(move + i, ',');
                 strncpy(coordinate, move + i, comma - move - 1);
                 srcY = atol(coordinate);
-                i+=2;
+                i = 1 + comma - move;
                 strcpy(coordinate, move + i);
                 last_state = atol(coordinate);
             } else {
