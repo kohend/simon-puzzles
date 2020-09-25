@@ -138,7 +138,7 @@ static game_params *default_params(void)
 static bool game_fetch_preset(int i, char **name, game_params **params)
 {
     const int sizes[6] = {3, 5, 10, 15, 25, 50};
-    const bool aggressiveness[6] = {true, true, true, true, false, false};
+    const bool aggressiveness[6] = {true, true, true, true, true, false};
     if (i < 0 || i > 5) {
         return false;
     }
