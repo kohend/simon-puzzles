@@ -13,15 +13,15 @@ tiles to the the first tile state (according to the button). Right drag might no
 on touchscreens and touchpads.
 <p>
 The puzzle is guaranteed to be solvable, using single clues alone (the advanced logic, which
-works with more than one clue, is not implemented yet), the solution is not guaranteed to be
-unique, but it's very likely is. Anyway, a correct solution is always accepted.
+works with more than one clue, is not implemented yet, yet you can play advanced logic puzzles,
+they will just fail to auto-solve).
 
 The game is also known as: ArtMosaico, Count and Darken, Cuenta Y Sombrea, Fill-a-Pix,
 Fill-In, Komsu Karala, Magipic, Majipiku, Mosaico, Mosaik, Mozaiek, Nampre Puzzle, Nurie-Puzzle, Oekaki-Pix, Voisimage.
 Implementation is loosely based on https://github.com/mordechaim/Mosaic
 <p>
-Level affects the number of clues hidden, the lower it is, the more difficult the game is 
-(0 is all possible clues hidden, with 3 generate attempts for minimal clues), the game is
-guaranteed solvable in all levels.
+Aggressive is making sure that there are no spare clues, it takes a while to check, so it's disabled
+in the 50x50 preset, you are welcome to use it, but keep in mind that 50x50 can take minutes to generate
+and 100x100 can take over 30 minutes to generate, this may widely vary since it's random.
 <p>
 Puzzle was added to the collection by Didi Kohen, color design by Michal Shomer
