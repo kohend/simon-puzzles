@@ -192,6 +192,7 @@ static void decode_params(game_params *params, char const *string)
     }
 
     if (*curr != '\0') {
+        curr++;
         params->aggressive = atol(curr);
     }
     temp[loc] = '\0';
