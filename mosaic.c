@@ -1323,15 +1323,11 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
     sfree(ds);
 }
 
-static void draw_cell(drawing *dr, game_drawstate *ds,
-                    const game_state *state,
+static void draw_cell(drawing *dr, char cell, int ts, char clue_val,
                     int x, int y, bool flashing) {
-    const int ts = ds->tilesize;
     int startX = ((x * ts) + ts/2)-1, startY = ((y * ts)+ ts/2)-1;
     int color, text_color = COL_TEXT_DARK;
-    
-    char *cell_p = get_cords(state, state->cells_contents, x, y);
-    char cell = *cell_p;
+
     if (flashing) {
         cell ^= (STATE_BLANK | STATE_MARKED);
     }
@@ -1354,11 +1350,9 @@ static void draw_cell(drawing *dr, game_drawstate *ds,
     }
 
     draw_rect(dr, startX, startY, ts-1, ts-1, color);
-    struct board_cell *curr = NULL;
     char clue[5];
-    curr = get_cords(state, state->board->actual_board, x, y);
-    if (curr && curr->shown) {
-        sprintf(clue, "%d", curr->clue);
+    if (clue_val >= 0) {
+        sprintf(clue, "%d", clue_val);
         draw_text(dr, startX + ts/2, startY + ts/2, 1, ts * 3/5,
         ALIGN_VCENTRE | ALIGN_HCENTRE, text_color, clue);
     }
@@ -1377,7 +1371,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      */
     int x, y;
     bool drawn = true;
-    char status[20] = "";
+    char status[20] = "", clue_val;
     if (flashtime > 0) {
         draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BLANK);    
     } else {
@@ -1391,7 +1385,12 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     for (y=0;y<state->height;y++) {
         for (x=0;x<state->width;x++) {
             if (flashtime > 0 || !drawn || ds->state[(y*state->width)+x] != state->cells_contents[(y*state->width)+x]) {
-                draw_cell(dr, ds, state, x, y, flashtime > 0);
+                if (state->board->actual_board[(y*state->width)+x].shown) {
+                    clue_val = state->board->actual_board[(y*state->width)+x].clue;
+                } else {
+                    clue_val = -1;
+                }
+                draw_cell(dr, state->cells_contents[(y*state->width)+x], ds->tilesize, clue_val, x, y, flashtime > 0);
                 ds->state[(y*state->width)+x] = state->cells_contents[(y*state->width)+x];
             }
         }
