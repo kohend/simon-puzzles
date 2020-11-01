@@ -989,7 +989,7 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
 
 struct game_drawstate {
     int tilesize;
-    bool drawn;
+    char *state;
 };
 
 static char *interpret_move(const game_state *state, game_ui *ui,
@@ -1312,13 +1312,14 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = 0;
-    ds->drawn = false;
+    ds->state = NULL;
 
     return ds;
 }
 
 static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 {
+    sfree(ds->state);
     sfree(ds);
 }
 
@@ -1375,18 +1376,24 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * covering the whole window.
      */
     int x, y;
+    bool drawn = true;
     char status[20] = "";
     if (flashtime > 0) {
         draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BLANK);    
     } else {
-        if (!ds->drawn) {
+        if (!ds->state) {
             draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BACKGROUND);
+            drawn = false;
+            ds->state = snewn(state->width * state->width, char);
+            memset(ds->state, 0, sizeof(char) * state->width * state->width);
         }
     }
     for (y=0;y<state->height;y++) {
         for (x=0;x<state->width;x++) {
-            if (flashtime > 0 || !ds->drawn || !oldstate || oldstate->cells_contents[(y*state->width)+x] != state->cells_contents[(y*state->width)+x])
-            draw_cell(dr, ds, state, x, y, flashtime > 0);
+            if (flashtime > 0 || !drawn || ds->state[(y*state->width)+x] != state->cells_contents[(y*state->width)+x]) {
+                draw_cell(dr, ds, state, x, y, flashtime > 0);
+                ds->state[(y*state->width)+x] = state->cells_contents[(y*state->width)+x];
+            }
         }
     }
     draw_update(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize);
