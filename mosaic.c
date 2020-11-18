@@ -144,7 +144,6 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
     game_params *res = snew(game_params);
     res->height = sizes[i];
     res->width = sizes[i];
-    res->advanced = false;
     res->aggressive = aggressiveness[i];
     *params=res;
     char *value = snewn(25, char);
@@ -211,7 +210,7 @@ static char *encode_params(const game_params *params, bool full)
 
 static config_item *game_configure(const game_params *params)
 {
-    config_item *config = snewn(5, config_item);
+    config_item *config = snewn(4, config_item);
     char *value = snewn(12, char);
     config[0].type=C_STRING;
     config[0].name="Height";
@@ -222,23 +221,20 @@ static config_item *game_configure(const game_params *params)
     config[1].name="Width";
     sprintf(value,"%d", params->width);
     config[1].u.string.sval=value;
-    config[2].name="Advanced (unsupported)";
+    config[2].name="Aggressive generation (longer)";
     config[2].type=C_BOOLEAN;
-    config[2].u.boolean.bval = params->advanced;
-    config[3].name="Aggressive generation (longer)";
-    config[3].type=C_BOOLEAN;
-    config[3].u.boolean.bval = params->aggressive;
-    config[4].type=C_END;
+    config[2].u.boolean.bval = params->aggressive;
+    config[3].type=C_END;
     return config;
 }
 
 static game_params *custom_params(const config_item *cfg)
 {
     game_params *res = snew(game_params);
-    res->height=atol(cfg[0].u.string.sval);
-    res->width=atol(cfg[1].u.string.sval);
-    res->advanced=cfg[2].u.boolean.bval;
-    res->aggressive=cfg[3].u.boolean.bval;
+    res->height = atol(cfg[0].u.string.sval);
+    res->width = atol(cfg[1].u.string.sval);
+    res->aggressive = cfg[2].u.boolean.bval;
+    res->advanced = false;
     return res;
 }
 
