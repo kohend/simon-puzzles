@@ -1471,6 +1471,7 @@ const struct game thegame = {
     game_redraw,
     game_anim_length,
     game_flash_length,
+    NULL,
     game_status,
 #ifndef NO_PRINTING
     false, false, game_print_size, game_print,     

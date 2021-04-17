@@ -116,6 +116,11 @@ puzzle(mines
   OBJECTIVE "Find all the mines without treading on any of them.")
 cliprogram(mineobfusc mines.c COMPILE_DEFINITIONS STANDALONE_OBFUSCATOR)
 
+puzzle(mosaic
+  DISPLAYNAME "Mosaic"
+  DESCRIPTION "Number clues black and white puzzle"
+  OBJECTIVE "Find out if a square should be black or white according to the hints.")
+
 puzzle(net
   # The Windows Net shouldn't be called 'net.exe', since Windows
   # already has a reasonably important utility program by that name!
