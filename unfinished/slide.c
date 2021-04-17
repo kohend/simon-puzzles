@@ -899,7 +899,7 @@ static const char *validate_desc(const game_params *params, const char *desc)
     int *link;
     int mains = 0;
     int i, tx, ty, minmoves;
-    char *ret;
+    const char *ret;
 
     active = snewn(wh, bool);
     link = snewn(wh, int);
@@ -1395,7 +1395,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
 	    sprintf(data, "M%d-%d", ui->drag_anchor, ui->drag_currpos);
 	    str = dupstr(data);
 	} else
-	    str = "";		       /* null move; just update the UI */
+	    str = UI_UPDATE;
 	
 	ui->dragging = false;
 	ui->drag_anchor = ui->drag_currpos = -1;
@@ -2297,6 +2297,14 @@ static float game_flash_length(const game_state *oldstate,
     return 0.0F;
 }
 
+static void game_get_cursor_location(const game_ui *ui,
+                                     const game_drawstate *ds,
+                                     const game_state *state,
+                                     const game_params *params,
+                                     int *x, int *y, int *w, int *h)
+{
+}
+
 static int game_status(const game_state *state)
 {
     return state->completed ? +1 : 0;
@@ -2351,6 +2359,7 @@ const struct game thegame = {
     game_redraw,
     game_anim_length,
     game_flash_length,
+    game_get_cursor_location,
     game_status,
     false, false, game_print_size, game_print,
     true,			       /* wants_statusbar */
