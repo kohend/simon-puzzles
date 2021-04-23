@@ -166,25 +166,26 @@ static game_params *dup_params(const game_params *params)
 
 static void decode_params(game_params *params, char const *string)
 {
-    char *curr = strchr(string, 'x');
     char temp[15] = "";
+    strncpy(temp, string, 15);
+    char *curr = strchr(temp, 'x');
     char *prev = NULL;
     int loc = 0;
     if (!curr) {
         return;
     }
-    strncpy(temp, string, curr-string);
+    strncpy(temp, string, curr-temp);
     params->width = atol(temp);
     prev = curr;
-    curr = strchr(string, 'a');
+    curr = strchr(temp, 'a');
     if (!curr) {
         strcpy(temp, prev + 1);
+        curr = temp;
     } else {
         strncpy(temp, prev + 1, curr - prev);
     }
     params->height = atol(temp);
 
-    curr++;
     while (*curr != 'h' && *curr != '\0')
     {
         curr++;
@@ -194,7 +195,6 @@ static void decode_params(game_params *params, char const *string)
         curr++;
         params->aggressive = atol(curr);
     }
-    temp[loc] = '\0';
 }
 
 static char *encode_params(const game_params *params, bool full)
@@ -1477,6 +1477,6 @@ const struct game thegame = {
     false, false, game_print_size, game_print,     
 #endif
     true,			       /* wants_statusbar */
-    true, game_timing_state,
+    false, game_timing_state,
     0,				       /* flags */
 };
