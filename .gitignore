@@ -133,3 +133,7 @@
 /unfinished/separate
 /unfinished/slide
 /unfinished/sokoban
+/*.desktop
+/.cmake
+**/CMakeCache.txt
+**/CMakeFiles
