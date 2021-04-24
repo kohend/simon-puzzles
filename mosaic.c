@@ -1209,28 +1209,28 @@ static game_state *execute_move(const game_state *state, const char *move)
         comma=strchr(move_copy + i, ',');
         if (comma != NULL) {
             memset(coordinate, 0, sizeof(char)*12);
-            strncpy(coordinate, move + i, comma - move - 1);
+            strncpy(coordinate, move_copy + i, comma - move_copy - 1);
             x = atol(coordinate);
-            i = comma - move;
+            i = comma - move_copy;
             i++;
             memset(coordinate, 0, sizeof(char)*12);
             comma=strchr(move_copy + i, ',');
             if (comma) {
-                strncpy(coordinate, move_copy + i, comma - move - 1);
+                strncpy(coordinate, move_copy + i, comma - move_copy - 1);
                 y = atol(coordinate);
-                i = 1 + comma - move;
+                i = 1 + comma - move_copy;
                 comma=strchr(move_copy + i, ',');
-                strncpy(coordinate, move_copy + i, comma - move - 1);
+                strncpy(coordinate, move_copy + i, comma - move_copy - 1);
                 srcX = atol(coordinate);
-                i = 1 + comma - move;
+                i = 1 + comma - move_copy;
                 comma=strchr(move_copy + i, ',');
-                strncpy(coordinate, move_copy + i, comma - move - 1);
+                strncpy(coordinate, move_copy + i, comma - move_copy - 1);
                 srcY = atol(coordinate);
-                i = 1 + comma - move;
-                strcpy(coordinate, move + i);
+                i = 1 + comma - move_copy;
+                strcpy(coordinate, move_copy + i);
                 last_state = atol(coordinate);
             } else {
-                strcpy(coordinate, move + i);
+                strcpy(coordinate, move_copy + i);
                 y = atol(coordinate);
             }
         }
