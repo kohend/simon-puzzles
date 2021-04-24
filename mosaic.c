@@ -25,7 +25,7 @@
 #define DEFAULT_TILE_SIZE 32
 #define DEBUG_IMAGE 1
 #undef DEBUG_IMAGE
-
+#define FLASH_TIME 0.7F
 /* To enable debug prints define DEBUG_PRINTS */
 
 /* Getting the coordinates and returning NULL when out of scope 
@@ -131,6 +131,7 @@ struct game_drawstate {
     char *state;
     int cur_x, cur_y; /* -1, -1 for no cursor displayed. */
     int prev_cur_x, prev_cur_y;
+    bool negative;
 };
 
 static game_params *default_params(void)
@@ -1363,6 +1364,7 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
 
     ds->tilesize = 0;
     ds->state = NULL;
+    ds->negative = false;
 
     return ds;
 }
@@ -1423,8 +1425,16 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     bool drawn = true;
     bool cursor = false;
     char status[20] = "", clue_val;
+    bool is_flashing = false;
     if (flashtime > 0) {
-        draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BLANK);    
+        if (flashtime <= FLASH_TIME/2 && ds->negative == false) {
+            ds->negative = true;
+            draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BLANK);
+            is_flashing = true;
+        } else if (ds->negative){
+            ds->negative = false;
+            is_flashing = true;
+        }
     } else {
         if (!ds->state) {
             draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BACKGROUND);
@@ -1449,7 +1459,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
                 } else {
                     cursor = false;
                 }
-                draw_cell(dr, state->cells_contents[(y*state->width)+x], ds->tilesize, clue_val, x, y, flashtime > 0, cursor);
+                draw_cell(dr, state->cells_contents[(y*state->width)+x], ds->tilesize, clue_val, x, y, is_flashing, cursor);
                 ds->state[(y*state->width)+x] = state->cells_contents[(y*state->width)+x];
             }
         }
@@ -1474,7 +1484,7 @@ static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir, game_ui *ui)
 {
     if (!oldstate->cheating && oldstate->not_completed_clues > 0 && newstate->not_completed_clues == 0) {
-        return 0.7F;
+        return FLASH_TIME;
     }
     return 0.0F;
 }
