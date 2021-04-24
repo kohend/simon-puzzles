@@ -31,7 +31,9 @@
 /* Getting the coordinates and returning NULL when out of scope 
  * The absurd amount of parentesis is needed to avoid order of operations issues */
 #define get_cords(params, array, x, y) (((x) >= 0 && (y) >= 0) && ((x)< params->width && (y)<params->height))? \
-     array + ((y)*params->width)+x : NULL;
+     array + ((y)*params->width)+x : NULL
+
+#define COORD_FROM_CELL(d) ((d * ds->tilesize) + ds->tilesize/2)-1
 
 enum {
     COL_BACKGROUND = 0,
@@ -119,8 +121,17 @@ struct game_ui
     bool solved;
     bool in_progress;
     int last_x, last_y, last_state;
+    int cur_x, cur_y;
+    int prev_cur_x, prev_cur_y;
+    bool cur_visible;
 };
 
+struct game_drawstate {
+    int tilesize;
+    char *state;
+    int cur_x, cur_y; /* -1, -1 for no cursor displayed. */
+    int prev_cur_x, prev_cur_y;
+};
 
 static game_params *default_params(void)
 {
@@ -668,6 +679,20 @@ static bool start_point_check(size_t size, struct desc_cell *desc) {
     return false;
 }
 
+static void game_get_cursor_location(const game_ui *ui,
+                                     const game_drawstate *ds,
+                                     const game_state *state,
+                                     const game_params *params,
+                                     int *x, int *y, int *w, int *h)
+{
+    if(ui->cur_visible) {
+        *x = COORD_FROM_CELL(ui->cur_x);
+        *y = COORD_FROM_CELL(ui->cur_y);
+        *w = *h = ds->tilesize;
+    }
+}
+
+
 static void generate_image(const game_params *params, random_state *rs, bool *image) {
     int x,y;
     for (y=0; y< params->height; y++) {
@@ -957,6 +982,8 @@ static game_ui *new_ui(const game_state *state)
     ui->last_y = -1;
     ui->last_state = 0;
     ui->solved = false;
+    ui->cur_x = ui->cur_y = 0;
+    ui->cur_visible = false;
     return ui;
 }
 
@@ -976,17 +1003,14 @@ static void decode_ui(game_ui *ui, const char *encoding)
     ui->last_y = -1;
     ui->last_state = 0;
     ui->solved = false;
+    ui->cur_x = ui->cur_y = 0;
+    
 }
 
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
 }
-
-struct game_drawstate {
-    int tilesize;
-    char *state;
-};
 
 static char *interpret_move(const game_state *state, game_ui *ui,
                             const game_drawstate *ds,
@@ -998,7 +1022,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     char *ret = NULL;
     const char *cell_state;
     bool changed = false;
-    if (state->not_completed_clues == 0) {
+    if (state->not_completed_clues == 0 && !IS_CURSOR_MOVE(button)) {
         return NULL;
     }
     gameX = (x-(ds->tilesize/2))/ds->tilesize;
@@ -1025,6 +1049,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             ui->last_y = -1;
         }
         changed = true;
+        ui->cur_visible = false;
     } else if (button == LEFT_DRAG || button == RIGHT_DRAG) {
         move_type = 'd';
         /* allowing only drags in straight lines */
@@ -1067,6 +1092,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             ui->last_x = -1;
             ui->last_y = -1;
         }
+        ui->cur_visible = false;
     } else if (button == LEFT_RELEASE|| button == RIGHT_RELEASE) {
         move_type = 'e';
         if (gameX >= 0 && gameY >= 0 && gameX < state->width && gameY < state->height && ui->last_x >= 0 && ui->last_y >= 0 &&
@@ -1105,6 +1131,31 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         } else {
             ui->last_x = -1;
             ui->last_y = -1;
+        }
+        ui->cur_visible = false;
+    } else if (IS_CURSOR_MOVE(button)){
+        ui->prev_cur_x = ui->cur_x;
+        ui->prev_cur_y = ui->cur_y;
+        move_cursor(button, &ui->cur_x, &ui->cur_y, state->width, state->height, false);
+        ui->cur_visible = true;
+        return UI_UPDATE;
+    } else if (IS_CURSOR_SELECT(button)) {
+        if (!ui->cur_visible) {
+            ui->cur_x = 0;
+            ui->cur_y = 0;
+            ui->cur_visible = true;
+            return UI_UPDATE;
+        }
+
+        char cell_state = *(get_cords(state, state->cells_contents, ui->cur_x, ui->cur_y));
+
+        if (button == CURSOR_SELECT2) {
+            sprintf(move_desc, "T%d,%d", ui->cur_x, ui->cur_y);
+            ret = dupstr(move_desc);
+        } else {
+            /* Otherwise, treat as LEFT_BUTTON, for a single square. */    
+            sprintf(move_desc, "t%d,%d", ui->cur_x, ui->cur_y);
+            ret = dupstr(move_desc);
         }
     }
     return ret;
@@ -1298,6 +1349,7 @@ static float *game_colours(frontend *fe, int *ncolours)
     COLOUR(ret, COL_MARKED,  20/255.0F, 20/255.0F, 20/255.0F);
     COLOUR(ret, COL_UNMARKED,  148/255.0F, 196/255.0F, 190/255.0F);
     COLOUR(ret, COL_TEXT_SOLVED,  100/255.0F, 100/255.0F, 100/255.0F);
+    COLOUR(ret, COL_CURSOR,  255/255.0F, 200/255.0F, 200/255.0F);
 
     *ncolours = NCOLOURS;
     return ret;
@@ -1320,14 +1372,14 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 }
 
 static void draw_cell(drawing *dr, char cell, int ts, char clue_val,
-                    int x, int y, bool flashing) {
+                    int x, int y, bool flashing, bool cursor) {
     int startX = ((x * ts) + ts/2)-1, startY = ((y * ts)+ ts/2)-1;
     int color, text_color = COL_TEXT_DARK;
 
     if (flashing) {
         cell ^= (STATE_BLANK | STATE_MARKED);
     }
-    draw_rect_outline(dr, startX-1, startY-1, ts+1, ts+1, COL_GRID);
+    draw_rect_outline(dr, startX-1, startY-1, ts+1, ts+1, cursor ? COL_CURSOR : COL_GRID);
 
     if (cell & STATE_MARKED) {
         color = COL_MARKED;
@@ -1367,6 +1419,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      */
     int x, y;
     bool drawn = true;
+    bool cursor = false;
     char status[20] = "", clue_val;
     if (flashtime > 0) {
         draw_rect(dr, 0, 0, (state->width+1)*ds->tilesize, (state->height+1)*ds->tilesize, COL_BLANK);    
@@ -1380,13 +1433,21 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     }
     for (y=0;y<state->height;y++) {
         for (x=0;x<state->width;x++) {
-            if (flashtime > 0 || !drawn || ds->state[(y*state->width)+x] != state->cells_contents[(y*state->width)+x]) {
+            if (flashtime > 0 || !drawn ||
+                (ui->prev_cur_x == x && ui->prev_cur_y == y) ||
+                (ui->cur_x == x && ui->cur_y == y) ||
+                ds->state[(y*state->width)+x] != state->cells_contents[(y*state->width)+x]) {
                 if (state->board->actual_board[(y*state->width)+x].shown) {
                     clue_val = state->board->actual_board[(y*state->width)+x].clue;
                 } else {
                     clue_val = -1;
                 }
-                draw_cell(dr, state->cells_contents[(y*state->width)+x], ds->tilesize, clue_val, x, y, flashtime > 0);
+                if (ui->cur_visible && ui->cur_x == x && ui->cur_y == y) {
+                    cursor = true;
+                } else {
+                    cursor = false;
+                }
+                draw_cell(dr, state->cells_contents[(y*state->width)+x], ds->tilesize, clue_val, x, y, flashtime > 0, cursor);
                 ds->state[(y*state->width)+x] = state->cells_contents[(y*state->width)+x];
             }
         }
