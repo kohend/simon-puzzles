@@ -1198,13 +1198,15 @@ static game_state *execute_move(const game_state *state, const char *move)
     int srcX = -1, srcY = -1, size = state->height * state->width;
     char *comma, *cell, sol_char;
     char coordinate[30] = "";
+    char move_copy[30] = "";
     int steps = 1, bits, sol_location, dirX, dirY, diff, last_state = STATE_UNMARKED;
     unsigned int sol_value;
     struct board_cell *curr_cell;
+    strncpy(move_copy, move, 30);
     /* Check location */
     if (move[0] == 't' || move[0] == 'T' || move[0] == 'd' || move[0] == 'e') {
         i++;
-        comma=strchr(move + i, ',');
+        comma=strchr(move_copy + i, ',');
         if (comma != NULL) {
             memset(coordinate, 0, sizeof(char)*12);
             strncpy(coordinate, move + i, comma - move - 1);
@@ -1212,17 +1214,17 @@ static game_state *execute_move(const game_state *state, const char *move)
             i = comma - move;
             i++;
             memset(coordinate, 0, sizeof(char)*12);
-            comma=strchr(move + i, ',');
+            comma=strchr(move_copy + i, ',');
             if (comma) {
-                strncpy(coordinate, move + i, comma - move - 1);
+                strncpy(coordinate, move_copy + i, comma - move - 1);
                 y = atol(coordinate);
                 i = 1 + comma - move;
-                comma=strchr(move + i, ',');
-                strncpy(coordinate, move + i, comma - move - 1);
+                comma=strchr(move_copy + i, ',');
+                strncpy(coordinate, move_copy + i, comma - move - 1);
                 srcX = atol(coordinate);
                 i = 1 + comma - move;
-                comma=strchr(move + i, ',');
-                strncpy(coordinate, move + i, comma - move - 1);
+                comma=strchr(move_copy + i, ',');
+                strncpy(coordinate, move_copy + i, comma - move - 1);
                 srcY = atol(coordinate);
                 i = 1 + comma - move;
                 strcpy(coordinate, move + i);
