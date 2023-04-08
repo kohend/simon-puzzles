@@ -452,7 +452,7 @@ static int mark_side(const game_params *params,
                         struct solution_cell *sol, int x, int y,
                         int xdelta, int ydelta, int mark)
 {
-    int i, j, marked = 0, diff;
+    int i, marked = 0;
     struct solution_cell *curr;
 
     if (xdelta != 0 && ydelta == 0) {
@@ -511,7 +511,7 @@ static bool safe_get_cell(const game_params *params, struct desc_cell *desc,
 
 static char solve_cell_advanced(const game_params *params, struct desc_cell *desc,
                        struct board_cell *board, struct solution_cell *sol,
-                       int x, int y, bool **advanced_used)
+                       int x, int y, bool *advanced_used)
 {
     struct desc_cell curr;
 
