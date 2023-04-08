@@ -38,7 +38,7 @@
 #define FLASH_TIME 0.5F
 #define ADV_DIRECTION_COUNT 4
 /* To enable debug prints define DEBUG_PRINTS */
-#define DEBUG_PRINTS 1
+//#define DEBUG_PRINTS 1
 
 /* Getting the coordinates and returning NULL when out of scope
  * The parentheses are needed to avoid order of operations issues
@@ -511,7 +511,7 @@ static bool safe_get_cell(const game_params *params, struct desc_cell *desc,
 
 static char solve_cell_advanced(const game_params *params, struct desc_cell *desc,
                        struct board_cell *board, struct solution_cell *sol,
-                       int x, int y)
+                       int x, int y, bool **advanced_used)
 {
     struct desc_cell curr;
 
@@ -562,6 +562,7 @@ static char solve_cell_advanced(const game_params *params, struct desc_cell *des
                     {0, 0, 1, 0, -1,  0,  2,  0},
                     {0, 1, 0, 0,  0,  2,  0, -1},
                     {0, 0, 0, 1,  0, -1,  0,  2},
+                    // Side a x, Side a y, side b x, side b y, delta x marked, delta y marked, delta x blank, delta y blank
                     }; 
                 int i;
                 int changed = 0;
@@ -578,7 +579,10 @@ static char solve_cell_advanced(const game_params *params, struct desc_cell *des
                                 directions[i][4], directions[i][5], STATE_MARKED);
                             changed += mark_side(params, sol, x, y,
                                 directions[i][6], directions[i][7], STATE_BLANK);
-#ifdef DEBUG_PEINTS
+                            if (advanced_used != NULL) {
+                                *advanced_used = true;
+                            }
+#ifdef DEBUG_PRINTS
                             printf("Advanced solved x: %d, y: %d\n", x + directions[i][0], y + directions[i][1]);
 #endif
                         }
@@ -626,6 +630,7 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
     needed_array = snewn(shown, needed_list_item *);
     curr_needed = head;
     i = 0;
+    bool advanced_used = false;
     while (curr_needed) {
         needed_array[i] = curr_needed;
         curr_needed = curr_needed->next;
@@ -640,7 +645,7 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
         made_progress = false;
         for (i = 0; i < shown; i++) {
             curr = solve_cell_advanced(params, desc, NULL, sol, needed_array[i]->x,
-                            needed_array[i]->y);
+                            needed_array[i]->y, &advanced_used);
             if (curr == SOLVED_ERROR) {
                 error = true;
 #ifdef DEBUG_PRINTS
@@ -678,7 +683,11 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
     } else {
         sfree(sol);
     }
-    return solved == board_size;
+    if (!params->advanced) {
+        // Verify that an advanced board is advanced
+        advanced_used = true;
+    }
+    return solved == board_size && advanced_used;
 }
 
 static bool solve_game_actual(const game_params *params,
@@ -698,7 +707,7 @@ static bool solve_game_actual(const game_params *params,
         made_progress = false;
         for (y = 0; y < params->height; y++) {
             for (x = 0; x < params->width; x++) {
-                curr = solve_cell_advanced(params, NULL, desc, sol, x, y);
+                curr = solve_cell_advanced(params, NULL, desc, sol, x, y, NULL);
                 if (curr == SOLVED_ERROR) {
                     error = true;
 #ifdef DEBUG_PRINTS
