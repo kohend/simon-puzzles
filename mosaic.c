@@ -40,6 +40,8 @@
 /* To enable debug prints define DEBUG_PRINTS */
 //#define DEBUG_PRINTS 1
 
+#define UNUSED(x) (void)(x)
+
 /* Getting the coordinates and returning NULL when out of scope
  * The parentheses are needed to avoid order of operations issues
  */
@@ -270,6 +272,9 @@ static const char *validate_params(const game_params *params, bool full)
     if (params->height > MAX_TILES / params->width) {
         return MAX_TILES_ERROR;
     }
+    if (!(full == true || full == false)) {
+        return "Full variable invalid";
+    }
     return NULL;
 }
 
@@ -477,7 +482,7 @@ static int mark_side(const game_params *params,
             }
         }
     }
-    
+
     return marked;
 }
 
@@ -509,7 +514,7 @@ static bool safe_get_cell(const game_params *params, struct desc_cell *desc,
     return false;
 }
 
-static char solve_cell_advanced(const game_params *params, struct desc_cell *desc,
+static int solve_cell_advanced(const game_params *params, struct desc_cell *desc,
                        struct board_cell *board, struct solution_cell *sol,
                        int x, int y, bool *advanced_used)
 {
@@ -535,7 +540,7 @@ static char solve_cell_advanced(const game_params *params, struct desc_cell *des
         if (marked + blank < total) {
             sol[(y * params->width) + x].needed = true;
         }
-        
+
         return mark_around(params, sol, x, y, STATE_BLANK);
     }
     if (curr.shown) {
@@ -700,9 +705,9 @@ static bool solve_game_actual(const game_params *params,
     bool made_progress = true, error = false;
     int solved = 0, curr = 0;
 
-    memset(sol, 0, params->height * params->width * sizeof(*sol));
+    memset(sol, 0, board_size * sizeof(struct solution_cell));
     solved = 0;
-    while (solved < params->height * params->width && made_progress
+    while (solved < board_size && made_progress
            && !error) {
         made_progress = false;
         for (y = 0; y < params->height; y++) {
@@ -736,7 +741,7 @@ static bool solve_game_actual(const game_params *params,
     } else {
         sfree(sol);
     }
-    return solved == params->height * params->width;
+    return solved == board_size;
 }
 
 static void hide_clues(const game_params *params, struct desc_cell *desc,
@@ -808,7 +813,7 @@ static void hide_clues(const game_params *params, struct desc_cell *desc,
 
 static bool start_point_check(size_t size, struct desc_cell *desc)
 {
-    int i;
+    size_t i;
     for (i = 0; i < size; i++) {
         if (desc[i].empty || desc[i].full) {
             return true;
@@ -823,6 +828,8 @@ static void game_get_cursor_location(const game_ui *ui,
                                      const game_params *params, int *x,
                                      int *y, int *w, int *h)
 {
+    UNUSED(state);
+    UNUSED(params);
     if (ui->cur_visible) {
         *x = COORD_FROM_CELL(ui->cur_x);
         *y = COORD_FROM_CELL(ui->cur_y);
@@ -855,6 +862,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         snewn(params->height * params->width, struct desc_cell);
     int x, y, location_in_str;
 
+    UNUSED(aux);
+    UNUSED(interactive);
     while (!valid) {
         generate_image(params, rs, image);
 #ifdef DEBUG_IMAGE
@@ -985,6 +994,7 @@ static game_state *new_game(midend *me, const game_params *params,
     int dest_loc;
     int spaces, total_spaces;
 
+    UNUSED(me);
     state->cheating = false;
     state->not_completed_clues = 0;
     dest_loc = 0;
@@ -1071,6 +1081,8 @@ static char *solve_game(const game_state *state,
     int i, bits, ret_loc = 1;
     int size = state->width * state->height;
 
+    UNUSED(aux);
+    UNUSED(currstate);
     param.width = state->width;
     param.height = state->height;
     param.advanced = state->advanced;
@@ -1105,6 +1117,7 @@ static char *solve_game(const game_state *state,
 
 static bool game_can_format_as_text_now(const game_params *params)
 {
+    UNUSED(params);
     return true;
 }
 
@@ -1139,6 +1152,7 @@ static game_ui *new_ui(const game_state *state)
     ui->solved = false;
     ui->cur_x = ui->cur_y = 0;
     ui->cur_visible = getenv_bool("PUZZLES_SHOW_CURSOR", false);
+    UNUSED(state);
     return ui;
 }
 
@@ -1149,16 +1163,22 @@ static void free_ui(game_ui *ui)
 
 static char *encode_ui(const game_ui *ui)
 {
+    UNUSED(ui);
     return NULL;
 }
 
 static void decode_ui(game_ui *ui, const char *encoding)
 {
+    UNUSED(ui);
+    UNUSED(encoding);
 }
 
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
+    UNUSED(newstate);
+    UNUSED(oldstate);
+    UNUSED(ui);
 }
 
 static const char *current_key_label(const game_ui *ui,
@@ -1447,7 +1467,7 @@ static game_state *execute_move(const game_state *state, const char *move)
         sol_location = 0;
         bits = 0;
         i = 1;
-        while (i < strlen(move)) {
+        while ((long unsigned int)i < strlen(move)) {
             sol_value = 0;
             while (bits < 8) {
                 sol_value <<= 4;
@@ -1542,6 +1562,8 @@ static void game_set_size(drawing *dr, game_drawstate *ds,
                           const game_params *params, int tilesize)
 {
     ds->tilesize = tilesize;
+    UNUSED(dr);
+    UNUSED(params);
 }
 
 #define COLOUR(ret, i, r, g, b)                                                \
@@ -1583,6 +1605,7 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     for (i = 0; i < (state->width + 1) * (state->height + 1); i++)
         ds->state[i] = -1;
 
+    UNUSED(dr);
     return ds;
 }
 
@@ -1590,6 +1613,7 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 {
     sfree(ds->state);
     sfree(ds);
+    UNUSED(dr);
 }
 
 static void draw_cell(drawing *dr, int cell, int ts, signed char clue_val,
@@ -1652,6 +1676,10 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     bool flashing = (flashtime > 0 && (flashtime <= FLASH_TIME / 3 ||
                                        flashtime > 2*FLASH_TIME / 3));
 
+    
+    UNUSED(animtime);
+    UNUSED(oldstate);
+    UNUSED(dir);
     for (y = 0; y <= state->height; y++) {
         for (x = 0; x <= state->width; x++) {
             bool inbounds = x < state->width && y < state->height;
@@ -1701,6 +1729,10 @@ static float game_anim_length(const game_state *oldstate,
                               const game_state *newstate, int dir,
                               game_ui *ui)
 {
+    UNUSED(ui);
+    UNUSED(oldstate);
+    UNUSED(newstate);
+    UNUSED(dir);
     return 0.0F;
 }
 
@@ -1708,6 +1740,8 @@ static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir,
                                game_ui *ui)
 {
+    UNUSED(ui);
+    UNUSED(dir);
     if (!oldstate->cheating && oldstate->not_completed_clues > 0 &&
         newstate->not_completed_clues == 0) {
         return FLASH_TIME;
