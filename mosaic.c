@@ -36,6 +36,7 @@
 #define DEBUG_IMAGE 1
 #undef DEBUG_IMAGE
 #define FLASH_TIME 0.5F
+#define ADV_DIRECTION_COUNT 4
 /* To enable debug prints define DEBUG_PRINTS */
 #define DEBUG_PRINTS 1
 
@@ -508,65 +509,6 @@ static bool safe_get_cell(const game_params *params, struct desc_cell *desc,
     return false;
 }
 
-static char solve_cell(const game_params *params, struct desc_cell *desc,
-                       struct board_cell *board, struct solution_cell *sol,
-                       int x, int y)
-{
-    struct desc_cell curr;
-
-    get_cell(params, desc, board, &curr, x, y);
-    int marked = 0, total = 0, blank = 0;
-
-    if (sol[(y * params->width) + x].solved) {
-        return 0;
-    }
-    count_around(params, sol, x, y, &marked, &blank, &total);
-    if (curr.full && curr.shown) {
-        sol[(y * params->width) + x].solved = true;
-        if (marked + blank < total) {
-            sol[(y * params->width) + x].needed = true;
-        }
-        mark_around(params, sol, x, y, STATE_MARKED);
-        return 1;
-    }
-    if (curr.empty && curr.shown) {
-        sol[(y * params->width) + x].solved = true;
-        if (marked + blank < total) {
-            sol[(y * params->width) + x].needed = true;
-        }
-        mark_around(params, sol, x, y, STATE_BLANK);
-        return 1;
-    }
-    if (curr.shown) {
-        if (!sol[(y * params->width) + x].solved) {
-            if (marked == curr.clue) {
-                sol[(y * params->width) + x].solved = true;
-                if (total != marked + blank) {
-                    sol[(y * params->width) + x].needed = true;
-                }
-                mark_around(params, sol, x, y, STATE_BLANK);
-            } else if (curr.clue == (total - blank)) {
-                sol[(y * params->width) + x].solved = true;
-                if (total != marked + blank) {
-                    sol[(y * params->width) + x].needed = true;
-                }
-                mark_around(params, sol, x, y, STATE_MARKED);
-            } else if (total == marked + blank) {
-                return SOLVED_ERROR;
-            } else {
-                return 0;
-            }
-            return 1;
-        }
-        return 0;
-    } else if (total == marked + blank) {
-        sol[(y * params->width) + x].solved = true;
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
 static char solve_cell_advanced(const game_params *params, struct desc_cell *desc,
                        struct board_cell *board, struct solution_cell *sol,
                        int x, int y)
@@ -615,8 +557,7 @@ static char solve_cell_advanced(const game_params *params, struct desc_cell *des
             } else if (params->advanced) {
                 struct desc_cell curr_side_a, curr_side_b;
                 bool side_a, side_b;
-#define DIRECTION_COUNT 4
-                int directions[DIRECTION_COUNT][8] = {
+                int directions[ADV_DIRECTION_COUNT][8] = {
                     {1, 0, 0, 0,  2,  0, -1,  0},
                     {0, 0, 1, 0, -1,  0,  2,  0},
                     {0, 1, 0, 0,  0,  2,  0, -1},
@@ -625,7 +566,7 @@ static char solve_cell_advanced(const game_params *params, struct desc_cell *des
                 int i;
                 int changed = 0;
 
-                for (i = 0; i< DIRECTION_COUNT; i++) {
+                for (i = 0; i< ADV_DIRECTION_COUNT; i++) {
                     side_a = safe_get_cell(params, desc, board, &curr_side_a, x + directions[i][0], y + directions[i][1]);
                     side_b = safe_get_cell(params, desc, board, &curr_side_b, x + directions[i][2], y + directions[i][3]);
 
@@ -637,7 +578,9 @@ static char solve_cell_advanced(const game_params *params, struct desc_cell *des
                                 directions[i][4], directions[i][5], STATE_MARKED);
                             changed += mark_side(params, sol, x, y,
                                 directions[i][6], directions[i][7], STATE_BLANK);
+#ifdef DEBUG_PEINTS
                             printf("Advanced solved x: %d, y: %d\n", x + directions[i][0], y + directions[i][1]);
+#endif
                         }
                     }
                 }
@@ -692,46 +635,26 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
         shuffle(needed_array, shown, sizeof(*needed_array), rs);
     }
     solved = 0;
-    /*if (params->advanced) {*/
-        while (solved < board_size && made_progress && !error) {
-            made_progress = false;
-            for (i = 0; i < shown; i++) {
-                curr = solve_cell_advanced(params, desc, NULL, sol, needed_array[i]->x,
-                                needed_array[i]->y);
-                if (curr == SOLVED_ERROR) {
-                    error = true;
-#ifdef DEBUG_PRINTS
-                    printf("error in cell x=%d, y=%d\n", needed_array[i]->x,
-                        needed_array[i]->y);
-#endif
-                    break;
-                }
-                if (curr > 0) {
-                    solved += curr;
-                    made_progress = true;
-                }
-            }
-        }    
-    /*}
-    while (solved < shown && made_progress && !error) {
+
+    while (solved < board_size && made_progress && !error) {
         made_progress = false;
         for (i = 0; i < shown; i++) {
-            curr = solve_cell(params, desc, NULL, sol, needed_array[i]->x,
-                              needed_array[i]->y);
+            curr = solve_cell_advanced(params, desc, NULL, sol, needed_array[i]->x,
+                            needed_array[i]->y);
             if (curr == SOLVED_ERROR) {
                 error = true;
 #ifdef DEBUG_PRINTS
                 printf("error in cell x=%d, y=%d\n", needed_array[i]->x,
-                       needed_array[i]->y);
+                    needed_array[i]->y);
 #endif
                 break;
             }
             if (curr > 0) {
-                solved++;
+                solved += curr;
                 made_progress = true;
             }
         }
-    }*/
+    }    
     while (head) {
         curr_needed = head;
         head = curr_needed->next;
@@ -767,15 +690,6 @@ static bool solve_game_actual(const game_params *params,
     struct solution_cell *sol = snewn(board_size, struct solution_cell);
     bool made_progress = true, error = false;
     int solved = 0, curr = 0;
-    /*char (*solve_func)(const game_params*,
-                              struct desc_cell*,
-                              struct board_cell*,
-                              struct solution_cell*,
-                              int, int) = solve_cell;
-
-    if (params->advanced) {
-        solve_func = solve_cell_advanced;
-    }*/
 
     memset(sol, 0, params->height * params->width * sizeof(*sol));
     solved = 0;
@@ -784,11 +698,7 @@ static bool solve_game_actual(const game_params *params,
         made_progress = false;
         for (y = 0; y < params->height; y++) {
             for (x = 0; x < params->width; x++) {
-                /*if (params->advanced) {*/
-                    curr = solve_cell_advanced(params, NULL, desc, sol, x, y);
-                /*} else {
-                    curr = solve_cell(params, NULL, desc, sol, x, y);
-                }*/
+                curr = solve_cell_advanced(params, NULL, desc, sol, x, y);
                 if (curr == SOLVED_ERROR) {
                     error = true;
 #ifdef DEBUG_PRINTS
