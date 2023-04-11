@@ -27,13 +27,20 @@
 
 #define DEFAULT_SIZE 10
 #define DEFAULT_AGGRESSIVENESS true
+#define DEFAULT_ADVANCED false
+#define SOLVED_NO_CHANGE -2
+#define SOLVED_ERROR -1
 #define MAX_TILES 10000
 #define MAX_TILES_ERROR "Maximum size is 10000 tiles"
 #define DEFAULT_TILE_SIZE 32
 #define DEBUG_IMAGE 1
 #undef DEBUG_IMAGE
 #define FLASH_TIME 0.5F
+#define ADV_DIRECTION_COUNT 4
 /* To enable debug prints define DEBUG_PRINTS */
+//#define DEBUG_PRINTS 1
+
+#define UNUSED(x) (void)(x)
 
 /* Getting the coordinates and returning NULL when out of scope
  * The parentheses are needed to avoid order of operations issues
@@ -77,6 +84,7 @@ struct game_params {
     int width;
     int height;
     bool aggressive;
+    bool advanced;
 };
 
 typedef struct board_state board_state;
@@ -93,6 +101,7 @@ struct game_state {
     int not_completed_clues;
     int width;
     int height;
+    bool advanced;
     char *cells_contents;
     board_state *board;
 };
@@ -144,6 +153,7 @@ static game_params *default_params(void)
     ret->width = DEFAULT_SIZE;
     ret->height = DEFAULT_SIZE;
     ret->aggressive = DEFAULT_AGGRESSIVENESS;
+    ret->advanced = DEFAULT_ADVANCED;
 
     return ret;
 }
@@ -159,6 +169,7 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
     res->height = sizes[i];
     res->width = sizes[i];
     res->aggressive = aggressiveness[i];
+    res->advanced = DEFAULT_ADVANCED;
     *params = res;
 
     char value[80];
@@ -186,12 +197,20 @@ static void decode_params(game_params *params, char const *string)
     if (*string == 'x') {
         string++;
         params->height = atoi(string);
-	while (*string && isdigit((unsigned char)*string)) string++;
+	    while (*string && isdigit((unsigned char)*string)) string++;
     }
     if (*string == 'h') {
         string++;
         params->aggressive = atoi(string);
-	while (*string && isdigit((unsigned char)*string)) string++;
+	    while (*string && isdigit((unsigned char)*string)) string++;
+    }
+    if (*string == 'a') {
+        string++;
+        if (*string && isdigit((unsigned char)*string)) {
+            params->advanced = atoi(string);
+        } else {
+            params->advanced = DEFAULT_ADVANCED;
+        }
     }
 }
 
@@ -201,15 +220,15 @@ static char *encode_params(const game_params *params, bool full)
     int pos = 0;
     pos += sprintf(encoded + pos, "%dx%d", params->width, params->height);
     if (full) {
-        if (params->aggressive != DEFAULT_AGGRESSIVENESS)
-            pos += sprintf(encoded + pos, "h%d", params->aggressive);
+        pos += sprintf(encoded + pos, "h%d", params->aggressive);
+        pos += sprintf(encoded + pos, "a%d", params->advanced);
     }
     return dupstr(encoded);
 }
 
 static config_item *game_configure(const game_params *params)
 {
-    config_item *config = snewn(4, config_item);
+    config_item *config = snewn(5, config_item);
     char value[80];
 
     config[0].type = C_STRING;
@@ -226,7 +245,11 @@ static config_item *game_configure(const game_params *params)
     config[2].type = C_BOOLEAN;
     config[2].u.boolean.bval = params->aggressive;
 
-    config[3].type = C_END;
+    config[3].name = "Advanced logic";
+    config[3].type = C_BOOLEAN;
+    config[3].u.boolean.bval = params->advanced;
+
+    config[4].type = C_END;
 
     return config;
 }
@@ -237,6 +260,7 @@ static game_params *custom_params(const config_item *cfg)
     res->height = atol(cfg[0].u.string.sval);
     res->width = atol(cfg[1].u.string.sval);
     res->aggressive = cfg[2].u.boolean.bval;
+    res->advanced = cfg[3].u.boolean.bval;
     return res;
 }
 
@@ -247,6 +271,9 @@ static const char *validate_params(const game_params *params, bool full)
     }
     if (params->height > MAX_TILES / params->width) {
         return MAX_TILES_ERROR;
+    }
+    if (!(full == true || full == false)) {
+        return "Full variable invalid";
     }
     return NULL;
 }
@@ -406,7 +433,7 @@ static void count_clues_around(const game_params *params,
     }
 }
 
-static void mark_around(const game_params *params,
+static int mark_around(const game_params *params,
                         struct solution_cell *sol, int x, int y, int mark)
 {
     int i, j, marked = 0;
@@ -423,25 +450,78 @@ static void mark_around(const game_params *params,
             }
         }
     }
+    return marked;
 }
 
-static char solve_cell(const game_params *params, struct desc_cell *desc,
+static int mark_side(const game_params *params,
+                        struct solution_cell *sol, int x, int y,
+                        int xdelta, int ydelta, int mark)
+{
+    int i, marked = 0;
+    struct solution_cell *curr;
+
+    if (xdelta != 0 && ydelta == 0) {
+        for (i = -1; i < 2; i++) {
+            curr = get_coords(params, sol, x + xdelta, y + i);
+            if (curr) {
+                if (curr->cell == STATE_UNMARKED) {
+                    curr->cell = mark;
+                    marked++;
+                }
+            }
+        }
+    } else if (xdelta == 0 && ydelta != 0)
+    {
+        for (i = -1; i < 2; i++) {
+            curr = get_coords(params, sol, x + i, y + ydelta);
+            if (curr) {
+                if (curr->cell == STATE_UNMARKED) {
+                    curr->cell = mark;
+                    marked++;
+                }
+            }
+        }
+    }
+
+    return marked;
+}
+
+static void get_cell(const game_params *params, struct desc_cell *desc,
+                     struct board_cell *board, struct desc_cell *curr,
+                     int x, int y)
+{
+    if (desc) {
+        curr->shown = desc[(y * params->width) + x].shown;
+        curr->clue = desc[(y * params->width) + x].clue;
+        curr->full = desc[(y * params->width) + x].full;
+        curr->empty = desc[(y * params->width) + x].empty;
+    } else {
+        curr->shown = board[(y * params->width) + x].shown;
+        curr->clue = board[(y * params->width) + x].clue;
+        curr->full = false;
+        curr->empty = false;
+    }
+}
+
+static bool safe_get_cell(const game_params *params, struct desc_cell *desc,
+                     struct board_cell *board, struct desc_cell *curr,
+                     int x, int y)
+{
+    if (x >= 0 && y >= 0 && x < params->width && y < params->height) {
+        get_cell(params, desc, board, curr, x, y);
+        return true;
+    }
+    return false;
+}
+
+static int solve_cell_advanced(const game_params *params, struct desc_cell *desc,
                        struct board_cell *board, struct solution_cell *sol,
-                       int x, int y)
+                       int x, int y, bool *advanced_used)
 {
     struct desc_cell curr;
 
-    if (desc) {
-        curr.shown = desc[(y * params->width) + x].shown;
-        curr.clue = desc[(y * params->width) + x].clue;
-        curr.full = desc[(y * params->width) + x].full;
-        curr.empty = desc[(y * params->width) + x].empty;
-    } else {
-        curr.shown = board[(y * params->width) + x].shown;
-        curr.clue = board[(y * params->width) + x].clue;
-        curr.full = false;
-        curr.empty = false;
-    }
+    get_cell(params, desc, board, &curr, x, y);
+
     int marked = 0, total = 0, blank = 0;
 
     if (sol[(y * params->width) + x].solved) {
@@ -453,16 +533,15 @@ static char solve_cell(const game_params *params, struct desc_cell *desc,
         if (marked + blank < total) {
             sol[(y * params->width) + x].needed = true;
         }
-        mark_around(params, sol, x, y, STATE_MARKED);
-        return 1;
+        return mark_around(params, sol, x, y, STATE_MARKED);
     }
     if (curr.empty && curr.shown) {
         sol[(y * params->width) + x].solved = true;
         if (marked + blank < total) {
             sol[(y * params->width) + x].needed = true;
         }
-        mark_around(params, sol, x, y, STATE_BLANK);
-        return 1;
+
+        return mark_around(params, sol, x, y, STATE_BLANK);
     }
     if (curr.shown) {
         if (!sol[(y * params->width) + x].solved) {
@@ -471,28 +550,61 @@ static char solve_cell(const game_params *params, struct desc_cell *desc,
                 if (total != marked + blank) {
                     sol[(y * params->width) + x].needed = true;
                 }
-                mark_around(params, sol, x, y, STATE_BLANK);
+                return mark_around(params, sol, x, y, STATE_BLANK);
             } else if (curr.clue == (total - blank)) {
                 sol[(y * params->width) + x].solved = true;
                 if (total != marked + blank) {
                     sol[(y * params->width) + x].needed = true;
                 }
-                mark_around(params, sol, x, y, STATE_MARKED);
-            } else if (total == marked + blank) {
-                return -1;
-            } else {
-                return 0;
+                return mark_around(params, sol, x, y, STATE_MARKED);
+            } else if ((total == marked + blank) || marked > curr.clue) {
+                return SOLVED_ERROR;
+            } else if (params->advanced) {
+                struct desc_cell curr_side_a, curr_side_b;
+                bool side_a, side_b;
+                int directions[ADV_DIRECTION_COUNT][8] = {
+                    {1, 0, 0, 0,  2,  0, -1,  0},
+                    {0, 0, 1, 0, -1,  0,  2,  0},
+                    {0, 1, 0, 0,  0,  2,  0, -1},
+                    {0, 0, 0, 1,  0, -1,  0,  2},
+                    // Side a x, Side a y, side b x, side b y, delta x marked, delta y marked, delta x blank, delta y blank
+                    }; 
+                int i;
+                int changed = 0;
+
+                for (i = 0; i< ADV_DIRECTION_COUNT; i++) {
+                    side_a = safe_get_cell(params, desc, board, &curr_side_a, x + directions[i][0], y + directions[i][1]);
+                    side_b = safe_get_cell(params, desc, board, &curr_side_b, x + directions[i][2], y + directions[i][3]);
+
+                    if (side_a && side_b && curr_side_a.shown & curr_side_b.shown) {
+                        if (curr_side_a.clue - curr_side_b.clue == 3) {
+                            sol[((y + directions[i][1])*params->width) + x + directions[i][0]].needed = true;
+                            sol[((y + directions[i][3])*params->width) + x + directions[i][2]].needed = true;
+                            changed += mark_side(params, sol, x, y,
+                                directions[i][4], directions[i][5], STATE_MARKED);
+                            changed += mark_side(params, sol, x, y,
+                                directions[i][6], directions[i][7], STATE_BLANK);
+                            if (advanced_used != NULL) {
+                                *advanced_used = true;
+                            }
+#ifdef DEBUG_PRINTS
+                            printf("Advanced solved x: %d, y: %d\n", x + directions[i][0], y + directions[i][1]);
+#endif
+                        }
+                    }
+                }
+                return changed;
             }
-            return 1;
         }
         return 0;
     } else if (total == marked + blank) {
         sol[(y * params->width) + x].solved = true;
-        return 1;
+        return SOLVED_NO_CHANGE;
     } else {
         return 0;
     }
 }
+
 
 static bool solve_check(const game_params *params, struct desc_cell *desc,
                         random_state *rs, struct solution_cell **sol_return)
@@ -523,6 +635,7 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
     needed_array = snewn(shown, needed_list_item *);
     curr_needed = head;
     i = 0;
+    bool advanced_used = false;
     while (curr_needed) {
         needed_array[i] = curr_needed;
         curr_needed = curr_needed->next;
@@ -532,25 +645,26 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
         shuffle(needed_array, shown, sizeof(*needed_array), rs);
     }
     solved = 0;
-    while (solved < shown && made_progress && !error) {
+
+    while (solved < board_size && made_progress && !error) {
         made_progress = false;
         for (i = 0; i < shown; i++) {
-            curr = solve_cell(params, desc, NULL, sol, needed_array[i]->x,
-                              needed_array[i]->y);
-            if (curr < 0) {
+            curr = solve_cell_advanced(params, desc, NULL, sol, needed_array[i]->x,
+                            needed_array[i]->y, &advanced_used);
+            if (curr == SOLVED_ERROR) {
                 error = true;
 #ifdef DEBUG_PRINTS
                 printf("error in cell x=%d, y=%d\n", needed_array[i]->x,
-                       needed_array[i]->y);
+                    needed_array[i]->y);
 #endif
                 break;
             }
             if (curr > 0) {
-                solved++;
+                solved += curr;
                 made_progress = true;
             }
         }
-    }
+    }    
     while (head) {
         curr_needed = head;
         head = curr_needed->next;
@@ -574,7 +688,11 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
     } else {
         sfree(sol);
     }
-    return solved == board_size;
+    if (!params->advanced) {
+        // Verify that an advanced board is advanced
+        advanced_used = true;
+    }
+    return solved == board_size && advanced_used;
 }
 
 static bool solve_game_actual(const game_params *params,
@@ -585,16 +703,17 @@ static bool solve_game_actual(const game_params *params,
     int board_size = params->height * params->width;
     struct solution_cell *sol = snewn(board_size, struct solution_cell);
     bool made_progress = true, error = false;
-    int solved = 0, iter = 0, curr = 0;
+    int solved = 0, curr = 0;
 
-    memset(sol, 0, params->height * params->width * sizeof(*sol));
+    memset(sol, 0, board_size * sizeof(struct solution_cell));
     solved = 0;
-    while (solved < params->height * params->width && made_progress
+    while (solved < board_size && made_progress
            && !error) {
+        made_progress = false;
         for (y = 0; y < params->height; y++) {
             for (x = 0; x < params->width; x++) {
-                curr = solve_cell(params, NULL, desc, sol, x, y);
-                if (curr < 0) {
+                curr = solve_cell_advanced(params, NULL, desc, sol, x, y, NULL);
+                if (curr == SOLVED_ERROR) {
                     error = true;
 #ifdef DEBUG_PRINTS
                     printf("error in cell x=%d, y=%d\n", x, y);
@@ -603,18 +722,26 @@ static bool solve_game_actual(const game_params *params,
                 }
                 if (curr > 0) {
                     made_progress = true;
+                    solved += curr;
                 }
-                solved += curr;
             }
         }
-        iter++;
+#ifdef DEBUG_PRINTS
+        printf("Current sol:\n");
+        for (y = 0; y < params->height && made_progress; y++) {
+            for (x = 0; x < params->width; x++) {
+                printf("%d ", sol[x+(y*params->width)].cell);
+            }
+            printf("\n");
+        }
+#endif
     }
     if (sol_return) {
         *sol_return = sol;
     } else {
         sfree(sol);
     }
-    return solved == params->height * params->width;
+    return solved == board_size;
 }
 
 static void hide_clues(const game_params *params, struct desc_cell *desc,
@@ -686,7 +813,7 @@ static void hide_clues(const game_params *params, struct desc_cell *desc,
 
 static bool start_point_check(size_t size, struct desc_cell *desc)
 {
-    int i;
+    size_t i;
     for (i = 0; i < size; i++) {
         if (desc[i].empty || desc[i].full) {
             return true;
@@ -701,6 +828,8 @@ static void game_get_cursor_location(const game_ui *ui,
                                      const game_params *params, int *x,
                                      int *y, int *w, int *h)
 {
+    UNUSED(state);
+    UNUSED(params);
     if (ui->cur_visible) {
         *x = COORD_FROM_CELL(ui->cur_x);
         *y = COORD_FROM_CELL(ui->cur_y);
@@ -733,6 +862,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         snewn(params->height * params->width, struct desc_cell);
     int x, y, location_in_str;
 
+    UNUSED(aux);
+    UNUSED(interactive);
     while (!valid) {
         generate_image(params, rs, image);
 #ifdef DEBUG_IMAGE
@@ -863,11 +994,13 @@ static game_state *new_game(midend *me, const game_params *params,
     int dest_loc;
     int spaces, total_spaces;
 
+    UNUSED(me);
     state->cheating = false;
     state->not_completed_clues = 0;
     dest_loc = 0;
     state->height = params->height;
     state->width = params->width;
+    state->advanced = params->advanced;
     state->cells_contents = snewn(params->height * params->width, char);
     memset(state->cells_contents, 0, params->height * params->width);
     state->board = snew(board_state);
@@ -912,6 +1045,7 @@ static game_state *dup_game(const game_state *state)
     ret->not_completed_clues = state->not_completed_clues;
     ret->width = state->width;
     ret->height = state->height;
+    ret->advanced = state->advanced;
     ret->cells_contents = snewn(state->height * state->width, char);
     memcpy(ret->cells_contents, state->cells_contents,
            state->height * state->width);
@@ -947,8 +1081,11 @@ static char *solve_game(const game_state *state,
     int i, bits, ret_loc = 1;
     int size = state->width * state->height;
 
+    UNUSED(aux);
+    UNUSED(currstate);
     param.width = state->width;
     param.height = state->height;
+    param.advanced = state->advanced;
     solved = solve_game_actual(&param, state->board->actual_board, &sol);
     if (!solved) {
         *error = dupstr("Could not solve this board");
@@ -980,6 +1117,7 @@ static char *solve_game(const game_state *state,
 
 static bool game_can_format_as_text_now(const game_params *params)
 {
+    UNUSED(params);
     return true;
 }
 
@@ -1014,6 +1152,7 @@ static game_ui *new_ui(const game_state *state)
     ui->solved = false;
     ui->cur_x = ui->cur_y = 0;
     ui->cur_visible = getenv_bool("PUZZLES_SHOW_CURSOR", false);
+    UNUSED(state);
     return ui;
 }
 
@@ -1024,16 +1163,22 @@ static void free_ui(game_ui *ui)
 
 static char *encode_ui(const game_ui *ui)
 {
+    UNUSED(ui);
     return NULL;
 }
 
 static void decode_ui(game_ui *ui, const char *encoding)
 {
+    UNUSED(ui);
+    UNUSED(encoding);
 }
 
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
+    UNUSED(newstate);
+    UNUSED(oldstate);
+    UNUSED(ui);
 }
 
 static const char *current_key_label(const game_ui *ui,
@@ -1322,7 +1467,7 @@ static game_state *execute_move(const game_state *state, const char *move)
         sol_location = 0;
         bits = 0;
         i = 1;
-        while (i < strlen(move)) {
+        while ((long unsigned int)i < strlen(move)) {
             sol_value = 0;
             while (bits < 8) {
                 sol_value <<= 4;
@@ -1417,6 +1562,8 @@ static void game_set_size(drawing *dr, game_drawstate *ds,
                           const game_params *params, int tilesize)
 {
     ds->tilesize = tilesize;
+    UNUSED(dr);
+    UNUSED(params);
 }
 
 #define COLOUR(ret, i, r, g, b)                                                \
@@ -1458,6 +1605,7 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     for (i = 0; i < (state->width + 1) * (state->height + 1); i++)
         ds->state[i] = -1;
 
+    UNUSED(dr);
     return ds;
 }
 
@@ -1465,6 +1613,7 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 {
     sfree(ds->state);
     sfree(ds);
+    UNUSED(dr);
 }
 
 static void draw_cell(drawing *dr, int cell, int ts, signed char clue_val,
@@ -1527,6 +1676,10 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     bool flashing = (flashtime > 0 && (flashtime <= FLASH_TIME / 3 ||
                                        flashtime > 2*FLASH_TIME / 3));
 
+    
+    UNUSED(animtime);
+    UNUSED(oldstate);
+    UNUSED(dir);
     for (y = 0; y <= state->height; y++) {
         for (x = 0; x <= state->width; x++) {
             bool inbounds = x < state->width && y < state->height;
@@ -1576,6 +1729,10 @@ static float game_anim_length(const game_state *oldstate,
                               const game_state *newstate, int dir,
                               game_ui *ui)
 {
+    UNUSED(ui);
+    UNUSED(oldstate);
+    UNUSED(newstate);
+    UNUSED(dir);
     return 0.0F;
 }
 
@@ -1583,6 +1740,8 @@ static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir,
                                game_ui *ui)
 {
+    UNUSED(ui);
+    UNUSED(dir);
     if (!oldstate->cheating && oldstate->not_completed_clues > 0 &&
         newstate->not_completed_clues == 0) {
         return FLASH_TIME;
