@@ -387,6 +387,100 @@ static void count_around(const game_params *params,
     }
 }
 
+static void count_around_overlap(const game_params *params,
+                         struct solution_cell *sol, int x1, int y1,
+                         int x2, int y2, int *marked1, int *blank1,
+                         int *total1, int *marked2, int *blank2,
+                         int *total2, int *total_overlap, int *blank_overlap,
+                         int *marked_overlap)
+{
+    int i, j;
+    struct solution_cell *curr = NULL;
+    (*total_overlap) = (*total1) = (*total2) = 0;
+    (*blank_overlap) = (*blank1) = (*blank2) = 0;
+    (*marked_overlap) = (*marked1) = (*marked2) = 0;
+
+    for (i = -1; i < 2; i++) {
+        for (j = -1; j < 2; j++) {
+            curr = get_coords(params, sol, x1 + i, y1 + j);
+            if (curr) {
+                if (abs(x1 + i - x2) < 2 && abs(y1 + i - y2)) {
+                    (*total_overlap)++;
+                    if ((curr->cell & STATE_BLANK) != 0) {
+                        (*blank_overlap)++;
+                    } else if ((curr->cell & STATE_MARKED) != 0) {
+                        (*marked_overlap)++;
+                    }
+                } else {
+                    (*total1)++;
+                    if ((curr->cell & STATE_BLANK) != 0) {
+                        (*blank1)++;
+                    } else if ((curr->cell & STATE_MARKED) != 0) {
+                        (*marked1)++;
+                    }
+                }
+            }
+        }
+    }
+    for (i = -1; i < 2; i++) {
+        for (j = -1; j < 2; j++) {
+            curr = get_coords(params, sol, x2 + i, y2 + j);
+            if (curr) {
+                if (!(abs(x2 + i - x1) < 2 && abs(y2 + i - y1))) {
+                    // Overlap was counted
+                    (*total2)++;
+                    if ((curr->cell & STATE_BLANK) != 0) {
+                        (*blank2)++;
+                    } else if ((curr->cell & STATE_MARKED) != 0) {
+                        (*marked2)++;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void mark_around_overlap(const game_params *params,
+                         struct solution_cell *sol, int x1, int y1,
+                         int x2, int y2, int mark1, int mark2, int mark_overlap)
+{
+    int i, j;
+    struct solution_cell *curr = NULL;
+
+    if (mark1 || mark_overlap) {
+        for (i = -1; i < 2; i++) {
+            for (j = -1; j < 2; j++) {
+                curr = get_coords(params, sol, x1 + i, y1 + j);
+                if (curr && curr->cell && (STATE_BLANK || STATE_MARKED) != 0) {
+                    if (abs(x1 + i - x2) < 2 && abs(y1 + i - y2)) {
+                        if (mark_overlap) {
+                            curr->cell = mark_overlap;
+                        }
+                    } else {
+                        if (mark1) {
+                            curr->cell = mark1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (!mark2) {
+        return;
+    }
+    for (i = -1; i < 2; i++) {
+        for (j = -1; j < 2; j++) {
+            curr = get_coords(params, sol, x2 + i, y2 + j);
+            if (curr && (STATE_BLANK || STATE_MARKED) != 0) {
+                if (!(abs(x2 + i - x1) < 2 && abs(y2 + i - y1))) {
+                    // Overlap was marked if needed
+                    curr->cell = mark2;
+                }
+            }
+        }
+    }
+}
+
 static void count_around_state(const game_state *state, int x, int y,
                                int *marked, int *blank, int *total)
 {
@@ -514,6 +608,29 @@ static bool safe_get_cell(const game_params *params, struct desc_cell *desc,
     return false;
 }
 
+static int solve_adv_logic(const game_params *params, struct desc_cell *desc,
+                       struct board_cell *board, struct solution_cell *sol,
+                       int x, int y, bool *advanced_used)
+{
+    
+    struct desc_cell curr_side_a, curr_side_b;
+    bool side_b;
+
+    get_cell(params, desc, board, &curr_side_a, x, y);
+    for (i = -1; i < 2; i++) {
+        for (j = -1; j < 2; j++) {
+            side_b = false;
+            if (i != 0 || j != 0)
+                side_b = safe_get_cell(params, desc, board, &curr_side_b, x + i, y + j);
+            if (side_b && curr_side_b.shown) {
+                count_around_overlap(params, sol, x, y, x + i, y + j)
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int solve_cell_advanced(const game_params *params, struct desc_cell *desc,
                        struct board_cell *board, struct solution_cell *sol,
                        int x, int y, bool *advanced_used)
@@ -571,7 +688,8 @@ static int solve_cell_advanced(const game_params *params, struct desc_cell *desc
                     }; 
                 int i;
                 int changed = 0;
-
+                return solve_adv_logic(params, desc, board, sol, x, y, advanced_used);
+                
                 for (i = 0; i< ADV_DIRECTION_COUNT; i++) {
                     side_a = safe_get_cell(params, desc, board, &curr_side_a, x + directions[i][0], y + directions[i][1]);
                     side_b = safe_get_cell(params, desc, board, &curr_side_b, x + directions[i][2], y + directions[i][3]);

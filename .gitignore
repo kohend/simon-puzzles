@@ -155,3 +155,9 @@ include/
 /unfinished/sokoban
 /unfinished/*.exe
 /*.desktop
+/.cmake
+/build-emscripten
+/jstest/*
+/js/*
+/build
+/help
