@@ -36,9 +36,7 @@
 #define DEBUG_IMAGE 1
 #undef DEBUG_IMAGE
 #define FLASH_TIME 0.5F
-#define ADV_DIRECTION_COUNT 4
 /* To enable debug prints define DEBUG_PRINTS */
-//#define DEBUG_PRINTS 1
 
 #define UNUSED(x) (void)(x)
 
@@ -400,11 +398,14 @@ static void count_around_overlap(const game_params *params,
     (*blank_overlap) = (*blank1) = (*blank2) = 0;
     (*marked_overlap) = (*marked1) = (*marked2) = 0;
 
+
+
     for (i = -1; i < 2; i++) {
         for (j = -1; j < 2; j++) {
             curr = get_coords(params, sol, x1 + i, y1 + j);
             if (curr) {
-                if (abs(x1 + i - x2) < 2 && abs(y1 + i - y2)) {
+                if (abs(x2 - (x1 + i)) < 2 && abs(y2 - (y1 + j)) < 2 &&
+                    abs(x1 - (x1 + i)) < 2 && abs(y1 - (y1 + j)) < 2) {
                     (*total_overlap)++;
                     if ((curr->cell & STATE_BLANK) != 0) {
                         (*blank_overlap)++;
@@ -426,7 +427,8 @@ static void count_around_overlap(const game_params *params,
         for (j = -1; j < 2; j++) {
             curr = get_coords(params, sol, x2 + i, y2 + j);
             if (curr) {
-                if (!(abs(x2 + i - x1) < 2 && abs(y2 + i - y1))) {
+                if (abs(x1 - (x2 + i)) >= 2 || abs(y1 - (y2 + j)) >= 2 ||
+                    abs(x2 - (x2 + i)) >= 2 || abs(y2 - (y2 + j)) >= 2) {
                     // Overlap was counted
                     (*total2)++;
                     if ((curr->cell & STATE_BLANK) != 0) {
@@ -440,24 +442,27 @@ static void count_around_overlap(const game_params *params,
     }
 }
 
-static void mark_around_overlap(const game_params *params,
+static int mark_around_overlap(const game_params *params,
                          struct solution_cell *sol, int x1, int y1,
                          int x2, int y2, int mark1, int mark2, int mark_overlap)
 {
-    int i, j;
+    int i, j, marked = 0;
     struct solution_cell *curr = NULL;
 
     if (mark1 || mark_overlap) {
         for (i = -1; i < 2; i++) {
             for (j = -1; j < 2; j++) {
                 curr = get_coords(params, sol, x1 + i, y1 + j);
-                if (curr && curr->cell && (STATE_BLANK || STATE_MARKED) != 0) {
-                    if (abs(x1 + i - x2) < 2 && abs(y1 + i - y2)) {
+                if (curr && (curr->cell & (STATE_BLANK | STATE_MARKED)) == 0) {
+                    if (abs(x2 - (x1 + i)) < 2 && abs(y2 - (y1 + j)) < 2 &&
+                        abs(x1 - (x1 + i)) < 2 && abs(y1 - (y1 + j)) < 2) {
                         if (mark_overlap) {
+                            marked++;
                             curr->cell = mark_overlap;
                         }
                     } else {
                         if (mark1) {
+                            marked++;
                             curr->cell = mark1;
                         }
                     }
@@ -466,19 +471,22 @@ static void mark_around_overlap(const game_params *params,
         }
     }
     if (!mark2) {
-        return;
+        return marked;
     }
     for (i = -1; i < 2; i++) {
         for (j = -1; j < 2; j++) {
             curr = get_coords(params, sol, x2 + i, y2 + j);
-            if (curr && (STATE_BLANK || STATE_MARKED) != 0) {
-                if (!(abs(x2 + i - x1) < 2 && abs(y2 + i - y1))) {
+            if (curr && (curr->cell & (STATE_BLANK | STATE_MARKED)) == 0) {
+                if (abs(x1 - (x2 + i)) >= 2 || abs(y1 - (y2 + j)) >= 2 ||
+                    abs(x2 - (x2 + i)) >= 2 || abs(y2 - (y2 + j)) >= 2) {
                     // Overlap was marked if needed
+                    marked++;
                     curr->cell = mark2;
                 }
             }
         }
     }
+    return marked;
 }
 
 static void count_around_state(const game_state *state, int x, int y,
@@ -615,20 +623,37 @@ static int solve_adv_logic(const game_params *params, struct desc_cell *desc,
     
     struct desc_cell curr_side_a, curr_side_b;
     bool side_b;
+    int marked1, marked2, total1, total2, blank1, blank2,
+        total_marked, total_overlap, marked_overlap, blank_overlap;
+    
+    int marked = 0, i, j;
 
     get_cell(params, desc, board, &curr_side_a, x, y);
-    for (i = -1; i < 2; i++) {
-        for (j = -1; j < 2; j++) {
+    for (i = -2; i <= 2; i++) {
+        for (j = -2; j <= 2; j++) {
             side_b = false;
             if (i != 0 || j != 0)
                 side_b = safe_get_cell(params, desc, board, &curr_side_b, x + i, y + j);
             if (side_b && curr_side_b.shown) {
-                count_around_overlap(params, sol, x, y, x + i, y + j)
+                count_around_overlap(params, sol, x, y, x + i, y + j,
+                    &marked1, &blank1, &total1, &marked2, &blank2, &total2, &total_overlap, &blank_overlap, &marked_overlap);
+                if ((total1 - blank1) > 0 && curr_side_a.clue - curr_side_b.clue == (total1 - blank1)) {
+                    sol[((y + j)*params->width) + x + i].needed = true;
+                    sol[(y*params->width) + x].needed = true;
+                    marked += mark_around_overlap(params, sol, x, y, x + i, y + j, STATE_MARKED, STATE_BLANK, STATE_UNMARKED);
+                } else if ((total2 - blank2) > 0 && curr_side_b.clue - curr_side_a.clue == (total2 - blank2)) {
+                    sol[((y + j)*params->width) + x + i].needed = true;
+                    sol[(y*params->width) + x].needed = true;
+                    marked += mark_around_overlap(params, sol, x, y, x + i, y + j, STATE_BLANK, STATE_MARKED, STATE_UNMARKED);
+                }
+                
             }
         }
     }
-
-    return 0;
+    if (marked && advanced_used != NULL) {
+        *advanced_used = true;
+    } 
+    return marked;
 }
 
 static int solve_cell_advanced(const game_params *params, struct desc_cell *desc,
@@ -677,41 +702,7 @@ static int solve_cell_advanced(const game_params *params, struct desc_cell *desc
             } else if ((total == marked + blank) || marked > curr.clue) {
                 return SOLVED_ERROR;
             } else if (params->advanced) {
-                struct desc_cell curr_side_a, curr_side_b;
-                bool side_a, side_b;
-                int directions[ADV_DIRECTION_COUNT][8] = {
-                    {1, 0, 0, 0,  2,  0, -1,  0},
-                    {0, 0, 1, 0, -1,  0,  2,  0},
-                    {0, 1, 0, 0,  0,  2,  0, -1},
-                    {0, 0, 0, 1,  0, -1,  0,  2},
-                    // Side a x, Side a y, side b x, side b y, delta x marked, delta y marked, delta x blank, delta y blank
-                    }; 
-                int i;
-                int changed = 0;
                 return solve_adv_logic(params, desc, board, sol, x, y, advanced_used);
-                
-                for (i = 0; i< ADV_DIRECTION_COUNT; i++) {
-                    side_a = safe_get_cell(params, desc, board, &curr_side_a, x + directions[i][0], y + directions[i][1]);
-                    side_b = safe_get_cell(params, desc, board, &curr_side_b, x + directions[i][2], y + directions[i][3]);
-
-                    if (side_a && side_b && curr_side_a.shown & curr_side_b.shown) {
-                        if (curr_side_a.clue - curr_side_b.clue == 3) {
-                            sol[((y + directions[i][1])*params->width) + x + directions[i][0]].needed = true;
-                            sol[((y + directions[i][3])*params->width) + x + directions[i][2]].needed = true;
-                            changed += mark_side(params, sol, x, y,
-                                directions[i][4], directions[i][5], STATE_MARKED);
-                            changed += mark_side(params, sol, x, y,
-                                directions[i][6], directions[i][7], STATE_BLANK);
-                            if (advanced_used != NULL) {
-                                *advanced_used = true;
-                            }
-#ifdef DEBUG_PRINTS
-                            printf("Advanced solved x: %d, y: %d\n", x + directions[i][0], y + directions[i][1]);
-#endif
-                        }
-                    }
-                }
-                return changed;
             }
         }
         return 0;
@@ -736,7 +727,7 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
     needed_list_item *head = NULL, *curr_needed, **needed_array;
     struct desc_cell *curr_desc;
 
-    memset(sol, 0, board_size * sizeof(*sol));
+    memset(sol, 0, board_size * sizeof(struct solution_cell));
     for (y = 0; y < params->height; y++) {
         for (x = 0; x < params->width; x++) {
             curr_desc = get_coords(params, desc, x, y);
@@ -791,7 +782,7 @@ static bool solve_check(const game_params *params, struct desc_cell *desc,
     sfree(needed_array);
     solved = 0;
     /* verifying all the board is solved */
-    if (made_progress) {
+    if (made_progress && !error) {
         for (y = 0; y < params->height; y++) {
             for (x = 0; x < params->width; x++) {
                 curr_sol = get_coords(params, sol, x, y);
@@ -1010,6 +1001,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         if (!valid) {
 #ifdef DEBUG_PRINTS
             printf("Not valid, regenerating.\n");
+            // 3x3h1a1#806982440004281
+            // 3x3h1a1#464691611224041
 #endif
         } else {
             valid = solve_check(params, desc, rs, NULL);
