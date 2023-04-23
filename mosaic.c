@@ -627,6 +627,7 @@ static int solve_adv_logic(const game_params *params, struct desc_cell *desc,
         total_marked, total_overlap, marked_overlap, blank_overlap;
     
     int marked = 0, i, j;
+    int to_mark;
 
     get_cell(params, desc, board, &curr_side_a, x, y);
     for (i = -2; i <= 2; i++) {
@@ -637,15 +638,30 @@ static int solve_adv_logic(const game_params *params, struct desc_cell *desc,
             if (side_b && curr_side_b.shown) {
                 count_around_overlap(params, sol, x, y, x + i, y + j,
                     &marked1, &blank1, &total1, &marked2, &blank2, &total2, &total_overlap, &blank_overlap, &marked_overlap);
-                if ((total1 - blank1) > 0 && curr_side_a.clue - curr_side_b.clue == (total1 - blank1)) {
+                if ((total1 - blank1) > 0 && (curr_side_a.clue - curr_side_b.clue) == (total1 - blank1)) {
                     sol[((y + j)*params->width) + x + i].needed = true;
                     sol[(y*params->width) + x].needed = true;
                     marked += mark_around_overlap(params, sol, x, y, x + i, y + j, STATE_MARKED, STATE_BLANK, STATE_UNMARKED);
-                } else if ((total2 - blank2) > 0 && curr_side_b.clue - curr_side_a.clue == (total2 - blank2)) {
+                } else if ((total2 - blank2) > 0 && (curr_side_b.clue - curr_side_a.clue) == (total2 - blank2)) {
                     sol[((y + j)*params->width) + x + i].needed = true;
                     sol[(y*params->width) + x].needed = true;
                     marked += mark_around_overlap(params, sol, x, y, x + i, y + j, STATE_BLANK, STATE_MARKED, STATE_UNMARKED);
-                }
+                } else if ((curr_side_a.clue - total1) == curr_side_b.clue ||
+                        (curr_side_a.clue - total1) == (curr_side_b.clue - marked2)) {
+                    sol[((y + j)*params->width) + x + i].needed = true;
+                    sol[(y*params->width) + x].needed = true;
+                    marked += mark_around_overlap(params, sol, x, y, x + i, y + j, STATE_MARKED, STATE_BLANK, STATE_UNMARKED);
+                } else if ((curr_side_b.clue - total2) == curr_side_a.clue ||
+                        (curr_side_b.clue - total2) == (curr_side_a.clue - marked1)) {
+                    sol[((y + j)*params->width) + x + i].needed = true;
+                    sol[(y*params->width) + x].needed = true;
+                    marked += mark_around_overlap(params, sol, x + i, y + j, x, y, STATE_MARKED, STATE_BLANK, STATE_UNMARKED);
+                } /*else if ((total_overlap + total1 - blank1 - curr_side_a.clue) == 
+                            (total_overlap + total2 - blank2 - curr_side_b.clue)) {
+                    sol[((y + j)*params->width) + x + i].needed = true;
+                    sol[(y*params->width) + x].needed = true;
+                    marked += mark_around_overlap(params, sol, x, y, x + i, y + j, STATE_MARKED, STATE_MARKED, STATE_UNMARKED);
+                }*/
                 
             }
         }
