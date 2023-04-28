@@ -638,6 +638,9 @@ static int solve_adv_logic(const game_params *params, struct desc_cell *desc,
             if (side_b && curr_side_b.shown) {
                 count_around_overlap(params, sol, x, y, x + i, y + j,
                     &marked1, &blank1, &total1, &marked2, &blank2, &total2, &total_overlap, &blank_overlap, &marked_overlap);
+                if (curr_side_b.clue == 0 || (total2 + total_overlap) == curr_side_b.clue) {
+                    continue;
+                }
                 if ((total1 - blank1) > 0 && (curr_side_a.clue - curr_side_b.clue) == (total1 - blank1)) {
                     sol[((y + j)*params->width) + x + i].needed = true;
                     sol[(y*params->width) + x].needed = true;
